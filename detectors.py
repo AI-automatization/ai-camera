@@ -54,6 +54,9 @@ ZONES = {
     "Oybek": {
         "101": ENTRANCE, "201": COWORKING, "401": COWORKING, "501": CLASSROOM,
     },
+    # Mac kamerasi — yuz tanishni sinash uchun. Zonasi yo'q, ya'ni joyga
+    # bog'liq qoidalar (3.8 administratsiya, 3.11 coworking) unga tegmaydi.
+    "Mac": {"0": None},
     "Chilonzor": {
         "101": CLASSROOM, "201": CLASSROOM, "301": CLASSROOM, "401": CLASSROOM,
         "501": CLASSROOM, "601": KITCHEN, "701": CLASSROOM, "801": CLASSROOM,

@@ -117,6 +117,8 @@ OFFLINE_JPEG = placeholder("Ulanmadi")
 class Branch:
     """Bitta filialning NVR si: kameralari, budjeti, qulfi."""
 
+    local = False        # NVR (tezlik budjeti cheklangan)
+
     def __init__(self, name, host, cameras):
         self.name = name
         self.host = host
@@ -421,6 +423,8 @@ def build():
     """ENABLED dagi filiallarni yaratadi va ishga tushiradi."""
     for name in ENABLED:
         BRANCHES[name] = Branch(name, BRANCH_HOSTS[name], BRANCH_CAMERAS[name])
+    if os.environ.get("MAC_CAMERA_OFF") != "1":
+        BRANCHES["Mac"] = LocalBranch()
     for br in BRANCHES.values():
         br.start()
     return BRANCHES
@@ -435,3 +439,138 @@ def all_cameras():
 def find(branch, channel):
     br = BRANCHES.get(branch)
     return br.cameras.get(channel) if br else None
+
+
+# ── Mac kamerasi ─────────────────────────────────────────────────────
+# Yuz tanishni sinash uchun. NVR kameralarida yuz 13-41 piksel bo'ladi va
+# tanib bo'lmaydi (o'lchangan), Mac kamerasida esa yuz katta chiqadi —
+# tanish shu yerda haqiqatan sinaladi.
+#
+# Bu NVR emas, lekin Branch/Camera bilan bir xil interfeysni beradi, shuning
+# uchun ilova uni oddiy filial kabi ko'radi.
+LOCAL_INDEX = int(os.environ.get("MAC_CAMERA", "0"))
+LOCAL_WIDTH, LOCAL_HEIGHT = 1920, 1080
+LOCAL_JPEG_QUALITY = 90
+
+
+class LocalCamera:
+    """Kompyuterga ulangan kamera (cv2.VideoCapture)."""
+
+    NEW, SAME, FAIL = "new", "same", "fail"
+
+    def __init__(self, branch, channel="0", name="Mac kamera"):
+        self.branch = branch
+        self.channel = channel
+        self.name = name
+        self.jpeg = None
+        self.seq = 0
+        self.online = False
+        self.state = {}
+        self.fps = 0.0
+        self.lock = threading.Lock()
+        self._raw = None
+        self._raw_lock = threading.Lock()
+        self._stamps = deque(maxlen=20)
+        self.running = True
+
+    @property
+    def key(self):
+        return f"{self.branch.name}/{self.channel}"
+
+    def start(self):
+        threading.Thread(target=self._grab, daemon=True).start()
+
+    def _grab(self):
+        cap = cv2.VideoCapture(LOCAL_INDEX)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, LOCAL_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LOCAL_HEIGHT)
+        if not cap.isOpened():
+            print(f"[{self.branch.name}] kamera ochilmadi — Terminal'ga "
+                  f"kamera ruxsati kerak (System Settings > Privacy > Camera)")
+            self.branch.reachable = False
+            return
+        self.branch.reachable = True
+        while self.running:
+            ok, frame = cap.read()
+            if not ok:
+                self.online = False
+                time.sleep(0.2)
+                continue
+            self.online = True
+            with self._raw_lock:
+                self._raw = frame
+            ok, buf = cv2.imencode(".jpg", frame,
+                                   [cv2.IMWRITE_JPEG_QUALITY, LOCAL_JPEG_QUALITY])
+            if not ok:
+                continue
+            now = time.time()
+            with self.lock:
+                self.jpeg = buf.tobytes()
+                self.seq += 1
+                self._stamps.append(now)
+                if len(self._stamps) > 1:
+                    span = self._stamps[-1] - self._stamps[0]
+                    self.fps = (len(self._stamps) - 1) / span if span > 0 else 0.0
+            # 30 kadr/sek kerak emas — protsessorni bo'shatamiz
+            time.sleep(0.05)
+        cap.release()
+
+    def take_frame(self):
+        with self._raw_lock:
+            frame, self._raw = self._raw, None
+        return frame
+
+    def apply(self, state):
+        with self.lock:
+            self.state = state
+
+    def snapshot(self):
+        with self.lock:
+            return self.jpeg or PLACEHOLDER
+
+    def fetch_once(self, sess=None):
+        return self.SAME       # o'zi uzluksiz oladi, skaner tegmasin
+
+
+class LocalBranch:
+    """Mac kamerasi uchun soxta filial — Branch bilan bir xil interfeys."""
+
+    local = True         # kompyuterdagi kamera: budjet cheklovi yo'q,
+                         # shuning uchun grid'da ham jonli ko'rsatiladi
+
+    def __init__(self, name="Mac"):
+        self.name = name
+        self.host = "local"
+        self.reachable = None
+        self.locked_until = 0.0
+        self.scanning = False
+        self.scanned_at = 0.0
+        self.stream_token = 0
+        self.focus = {"channel": None, "until": 0.0}
+        self.cameras = {"0": LocalCamera(self)}
+
+    def start(self):
+        # Kamera ochilguncha kutamiz — aks holda ishga tushish xabarida
+        # "ULANMADI" deb noto'g'ri yoziladi.
+        for cam in self.cameras.values():
+            cam.start()
+        for _ in range(20):
+            if self.reachable is not None:
+                break
+            time.sleep(0.1)
+
+    def lock_state(self):
+        return (False, 0)
+
+    def set_focus(self, channel):
+        self.focus.update(channel=channel, until=time.time() + FOCUS_TTL)
+
+    def focused_channel(self):
+        return self.focus["channel"] if time.time() < self.focus["until"] else None
+
+    def new_stream_token(self):
+        self.stream_token += 1
+        return self.stream_token
+
+    def request_scan(self):
+        self.scanned_at = time.time()      # kamera uzluksiz ishlaydi

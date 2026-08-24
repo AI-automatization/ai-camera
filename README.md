@@ -32,6 +32,18 @@ Har filialning o'z NVR si, o'z tezlik budjeti va o'z qulfi bor — biri
 qulflansa ikkinchisi ishlayveradi. Oybek (`oybek.marsits.uz:8080`) ofis
 tarmog'idan ochilmaydi.
 
+**Mac kamerasi** ham filial sifatida qo'shilgan (`Mac`). U yuz tanishni
+sinash uchun: NVR kameralarida yuz 13-41 piksel bo'ladi va tanib bo'lmaydi,
+Mac kamerasida esa 300-500 piksel — tanish haqiqatan ishlaydi. Kerak
+bo'lmasa o'chirish:
+
+```bash
+MAC_CAMERA_OFF=1 ./venv/bin/python app.py
+```
+
+Birinchi ishga tushirishda macOS Terminal'dan kamera ruxsatini so'raydi
+(System Settings > Privacy & Security > Camera).
+
 ## Qismlari
 
 | Fayl | Vazifasi |

@@ -128,8 +128,12 @@ def analyzer():
             persons = pose.people_in(frame)
             # Yuz qidirish eng qimmat qadam (138 ms). Xonada odam bo'lmasa
             # qidirishning ma'nosi yo'q — bo'sh xonalarda bekorga sarflanardi.
-            found = (faces.identify(frame, branch=branch)
-                     if any(p["reliable"] for p in persons) else [])
+            #
+            # Shart ODAM BORLIGIGA bog'liq, "holati o'qiladimi" ga emas:
+            # yaqindan turgan odamning qutisi kadr chetiga tegadi va
+            # reliable=False bo'ladi — Mac kamerasida aynan shu sababli yuz
+            # umuman qidirilmasdi.
+            found = faces.identify(frame, branch=branch) if persons else []
         except Exception as e:
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
@@ -399,7 +403,9 @@ async function tick(){
     b.className='idbadge '+(c.identity?'idok':'idno');
     // Grid MUZLATILGAN — kadrlar faqat sanashdan keyin yangilanadi.
     // Kameralar doimiy ishlamaydi, ichiga bosib kirilganda ishlaydi.
-    if(bigCh===null && lastScan!==s.scanned_ago)
+    // Mac kamerasi bundan mustasno: u NVR budjetini sarflamaydi, shuning
+    // uchun grid'da ham jonli turadi.
+    if(bigCh===null && (s.local || lastScan!==s.scanned_ago))
       document.getElementById('s'+c.channel).src=
         '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh){
@@ -460,6 +466,7 @@ def state():
     done, _ = detectors.status()
     locked, left = br.lock_state() if br else (False, 0)
     return jsonify(branch=name, branches=list(nvr.BRANCHES),
+                   local=bool(br and getattr(br, "local", False)),
                    scanning=bool(br and br.scanning),
                    scanned_ago=int(time.time() - br.scanned_at)
                    if br and br.scanned_at else None,
