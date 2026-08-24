@@ -26,7 +26,6 @@ from flask import (Flask, Response, jsonify, render_template_string,
                    request, send_file)
 
 import nvr
-import enhance
 import rules
 import faces
 import pose
@@ -141,19 +140,23 @@ def analyzer():
         h, w = frame.shape[:2]
         # Ramkalar FOIZDA saqlanadi: brauzer rasmni istalgan o'lchamda
         # ko'rsatadi, foiz esa o'lchamga bog'liq emas.
-        boxes = [{"x": round(100 * f["box"][0] / w, 2),
-                  "y": round(100 * f["box"][1] / h, 2),
-                  "w": round(100 * f["box"][2] / w, 2),
-                  "h": round(100 * f["box"][3] / h, 2),
-                  "label": f["name"] or ("kichik" if f.get("too_small") else "?"),
-                  "kind": "face" if f["name"] else "unknown"}
-                 for f in found]
-        boxes += [{"x": round(100 * p["box"][0] / w, 2),
-                   "y": round(100 * p["box"][1] / h, 2),
-                   "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
-                   "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
-                   "label": "bosh pastda", "kind": "alert"}
-                  for p in persons if p["reliable"] and p["head_down"]]
+        # Odam qutilari — asosiysi, chunki asosiy funksiya sanash.
+        # Raqamlanadi, ya'ni ekranda sanoqni ko'z bilan tekshirsa bo'ladi.
+        boxes = [{"x": round(100 * p["box"][0] / w, 2),
+                  "y": round(100 * p["box"][1] / h, 2),
+                  "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
+                  "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
+                  "label": str(i),
+                  "kind": "alert" if (p["reliable"] and p["head_down"]) else "person"}
+                 for i, p in enumerate(persons, 1)]
+        # Yuz ramkasi FAQAT kim ekani aniqlanganda. Tanib bo'lmaydigan
+        # kichik yuzlarga ramka chizish ekranni bekorga to'ldiradi.
+        boxes += [{"x": round(100 * f["box"][0] / w, 2),
+                   "y": round(100 * f["box"][1] / h, 2),
+                   "w": round(100 * f["box"][2] / w, 2),
+                   "h": round(100 * f["box"][3] / h, 2),
+                   "label": f["name"], "kind": "face"}
+                  for f in found if f["name"]]
         cam.apply({"faces": found, "persons": persons, "events": events,
                    "zone": ctx.zone, "count": ctx.head_count,
                    "named": ctx.named, "boxes": boxes,
@@ -225,10 +228,11 @@ PAGE = """
  .ov{position:absolute;border:2px solid;border-radius:3px;pointer-events:none}
  .ov span{position:absolute;top:-19px;left:-2px;font-size:11px;line-height:1.4;
    padding:0 5px;border-radius:3px;white-space:nowrap;color:#111;font-weight:600}
- .ov.face{border-color:#4ade80} .ov.face span{background:#4ade80}
- .ov.unknown{border-color:#fb923c} .ov.unknown span{background:#fb923c}
+ .ov.person{border-color:#4ade80} .ov.person span{background:#4ade80}
+ .ov.face{border-color:#60a5fa} .ov.face span{background:#60a5fa}
  .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
- #bigbar{color:var(--fg);display:flex;gap:18px;align-items:center;font-size:14px}
+ #bigbar{color:var(--fg);display:flex;gap:14px;align-items:center;font-size:14px}
+ #bigcount{font-size:22px;margin-left:4px}
  #bigbar button{background:var(--card);color:var(--fg);border:1px solid var(--line);
    border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
  aside{background:var(--card);border:1px solid var(--line);border-radius:8px;
@@ -250,8 +254,8 @@ PAGE = """
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
 <div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
-  <span id=bigname></span><span class=dim id=bigfps></span>
-  <button id=clearbtn onclick="toggleClear()">Tiniqlashtirish</button>
+  <span id=bigname></span><b id=bigcount>0</b><span class=dim>odam</span>
+  <span class=dim id=bigfps></span>
   <button onclick="closeBig()">Yopish</button></div></div>
 <main>
   <div class=grid id=grid></div>
@@ -292,17 +296,11 @@ function build(cams){
   }
   built=true;
 }
-let bigCh=null, bigName='', clearOn=false;
+let bigCh=null, bigName='';
 async function doScan(){
   const b=document.getElementById('scanbtn');
   b.disabled=true; b.textContent='Sanalyapti…';
   await fetch('/scan/'+encodeURIComponent(branch),{method:'POST'});
-}
-function toggleClear(){
-  clearOn=!clearOn;
-  document.getElementById('clearbtn').textContent =
-    clearOn ? 'Asl kadr' : 'Tiniqlashtirish';
-  if(bigCh) openBig(bigCh,bigName);
 }
 // Ramkalar rasmga CHIZILMAYDI — ular rasm ustidagi HTML elementlar.
 // Sabab: chizish uchun kadrni dekod qilib, qayta kodlash kerak edi va bu
@@ -324,7 +322,7 @@ function drawBoxes(boxes){
 function openBig(ch,name){
   bigCh=ch; bigName=name;
   document.getElementById('bigimg').src=
-    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1'+(clearOn?'&clear=1':'');
+    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1';
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
@@ -374,6 +372,7 @@ async function tick(){
         '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh){
       document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
+      document.getElementById('bigcount').textContent=c.count;
       drawBoxes(c.boxes||[]);
     }
   }
@@ -464,8 +463,6 @@ def stream(branch, channel):
     if cam is None:
         return "yo'q", 404
     big = request.args.get("big") == "1"
-    # Yaxshilash FAQAT ekran uchun — modelga asl kadr boradi (enhance.py ga qara)
-    clear = request.args.get("clear") == "1"
 
     def gen():
         last = -1
@@ -478,11 +475,8 @@ def stream(branch, channel):
                 cam.branch.set_focus(channel)
             if cam.seq != last:
                 last = cam.seq
-                data = cam.snapshot()
-                if clear:
-                    data = enhance.enhance_jpeg(data)
                 yield (b"--f\r\nContent-Type: image/jpeg\r\n\r\n"
-                       + data + b"\r\n")
+                       + cam.snapshot() + b"\r\n")
             else:
                 time.sleep(0.02)
 
