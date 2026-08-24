@@ -10,3 +10,8 @@ __pycache__/
 # Sinov kadrlari
 *.jpg
 *.png
+
+# Sirlar va kesh
+.env
+.token
+*_cache.json
