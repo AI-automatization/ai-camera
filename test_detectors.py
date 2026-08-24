@@ -28,6 +28,34 @@ def person(seated=False, head_down=False, reliable=True):
             "seated": seated, "head_down": head_down}
 
 
+def _page_js_ok():
+    """app.py ichidagi sahifa skripti sintaksis jihatdan to'g'rimi.
+
+    O'zbekcha apostrof ("yuz o'qildi") JS satrini uzib, butun dashboardni
+    bo'sh qoldirgan edi — sahifa 200 qaytarardi, lekin hech narsa
+    ko'rinmasdi. Shuning uchun bu endi sinovda.
+    """
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if node is None:
+        print("       (node yo'q — o'tkazib yuborildi)")
+        return True
+    src = open("app.py").read()
+    html = src.split('PAGE = """')[1].split('"""')[0]
+    js = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(js)
+        path = f.name
+    r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+    if r.returncode:
+        print("      ", r.stderr.strip().split("\n")[0])
+    return r.returncode == 0
+
+
 def check(label, ok):
     print(f"  {'OK  ' if ok else 'XATO'} {label}")
     return ok
@@ -143,6 +171,9 @@ def main():
     s.update("k", True, 100.0)
     run("30 sekund uzilishdan keyin nolga tushadi",
         s.update("k", False, 130.0) == 0.0 and s.update("k", True, 131.0) < 1.0)
+
+    print("\n── Dashboard JS sintaksisi")
+    run("sahifa skripti buzilmagan", _page_js_ok())
 
     print(f"\n{'='*46}\n{passed} ta o'tdi, {failed} ta yiqildi")
     return 1 if failed else 0

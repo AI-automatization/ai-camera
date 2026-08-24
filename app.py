@@ -192,7 +192,7 @@ function build(cams){
       <div class=lbl><span>${c.name}</span>
       <span class=zone>${c.zone||''}</span></div>
       <div class=meta2><span>${c.count} odam</span>
-      <span class="${c.identity?'idok':'idno'}">${c.identity?'yuz o\'qildi':'yuz kichik'}</span></div>`;
+      <span class="${c.identity?'idok':'idno'}">${c.identity?"yuz aniq":"yuz kichik"}</span></div>`;
     d.querySelector('img').onclick=()=>fetch('/focus/'+c.channel,{method:'POST'});
     grid.appendChild(d);
   }
@@ -216,7 +216,7 @@ async function tick(){
       <div>${e.reason}</div>
       <div class=dim style="margin-top:4px">${e.rule_text}</div>
       <img src="/shot/${e.id}" loading=lazy>
-    </div>`).join('') : '<div class=empty>hozircha yo\\'q</div>';
+    </div>`).join('') : "<div class=empty>hodisa yo'q</div>";
 }
 tick(); setInterval(tick,3000);
 </script>
