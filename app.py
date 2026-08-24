@@ -33,7 +33,12 @@ import detectors
 
 PORT = 5001
 MAX_EVENTS = 60
-ANALYZE_INTERVAL = 1.0     # bitta kamerani shu tezlikdan tez tahlil qilmaymiz
+ANALYZE_INTERVAL = 1.0      # bitta kamerani shu tezlikdan tez tahlil qilmaymiz
+# Ochilgan kamera SEKINROQ tahlil qilinadi. Tahlil ~190 ms band qiladi
+# (pose 49 + yuz 138) va shu vaqtda video qotib turadi. Odam qarab turganda
+# silliqlik muhimroq: detektorlar baribir 20-30 sekundlik oynada ishlaydi,
+# 3 sekundda bir marta tahlil ularga yetadi.
+FOCUS_ANALYZE_INTERVAL = 3.0
 
 app = Flask(__name__)
 
@@ -106,7 +111,9 @@ def analyzer():
             cam = CAMERAS[order[i % len(order)]]
             i += 1
 
-        if time.time() - _last_analyzed.get(cam.key, 0) < ANALYZE_INTERVAL:
+        watched = cam.branch.focused_channel() == cam.channel
+        wait = FOCUS_ANALYZE_INTERVAL if watched else ANALYZE_INTERVAL
+        if time.time() - _last_analyzed.get(cam.key, 0) < wait:
             time.sleep(0.05)
             continue
         frame = cam.take_frame()
@@ -118,7 +125,10 @@ def analyzer():
         branch = cam.branch.name
         try:
             persons = pose.people(pose.infer(frame))
-            found = faces.identify(frame, branch=branch)
+            # Yuz qidirish eng qimmat qadam (138 ms). Xonada odam bo'lmasa
+            # qidirishning ma'nosi yo'q — bo'sh xonalarda bekorga sarflanardi.
+            found = (faces.identify(frame, branch=branch)
+                     if any(p["reliable"] for p in persons) else [])
         except Exception as e:
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue

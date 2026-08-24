@@ -79,9 +79,14 @@ ENABLED = [b.strip() for b in
 MAX_CONN = 6              # bitta NVR ga bir vaqtda shuncha so'rov
 FOCUS_WORKERS = 2         # ochilgan kamerani shuncha oqim bilan tortamiz
                           # (3 tasi yomonroq: 3.62 < 3.75 yangi kadr/sek)
-# Odam sanash — asosiy funksiya, shuning uchun fon kameralari kamera ochilganda
-# ham SEKINLASHMAYDI. 15 kamera 10 sekundda = 1.5 so'rov/sek, budjet ~17.
-BG_INTERVAL = 10.0
+# Fon kameralari BIRDANIGA ishlamaydi — bitta skaner ip ularni NAVBAT BILAN
+# aylanib chiqadi. Ilgari har kamerada o'z ipi bor edi va 15 tasi bir vaqtda
+# uyg'onib, ulanish limitini band qilardi: ochilgan kamera ular tugaguncha
+# kutib turardi va video 0.7-2.1 sekundga qotardi (o'lchandi, Yunusobod B3).
+#
+# Kamera ochilganda skaner BUTUNLAY to'xtaydi — butun budjet o'shanga ketadi.
+SCAN_GAP = 0.7            # navbatdagi kameralar orasidagi tanaffus
+SCAN_ROUND_REST = 8.0     # bir aylanish tugagach dam
 FOCUS_TTL = 6.0           # brauzer jim qolsa fokus bekor bo'ladi
 REACH_TIMEOUT = 4         # filial ulanadimi — shuncha kutamiz
 
@@ -172,11 +177,33 @@ class Branch:
 
     def start(self):
         self.probe()
-        for cam in self.cameras.values():
-            cam.start()
         for _ in range(FOCUS_WORKERS):
             threading.Thread(target=self._focus_worker, daemon=True).start()
         threading.Thread(target=self._keyframe_worker, daemon=True).start()
+        threading.Thread(target=self._scanner, daemon=True).start()
+
+    def _scanner(self):
+        """Odam sanash uchun kameralarni NAVBAT BILAN aylanib chiqadi.
+
+        Bir vaqtda faqat BITTA fon so'rovi bo'ladi. Kamera ochilgan bo'lsa
+        umuman so'ramaydi — ochilgan kamera butun budjetni oladi.
+        """
+        sess = requests.Session()
+        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        order = list(self.cameras.values())
+        i = 0
+        while True:
+            if self.focused_channel():
+                time.sleep(0.5)          # kimdir qarab turibdi — tegmaymiz
+                continue
+            if self.reachable is False or time.time() < self.locked_until:
+                time.sleep(5)
+                continue
+            cam = order[i % len(order)]
+            i += 1
+            if cam.fetch_once(sess) == Camera.FAIL:
+                cam.online = False
+            time.sleep(SCAN_ROUND_REST if i % len(order) == 0 else SCAN_GAP)
 
     def _keyframe_worker(self):
         """Ochilgan kameradan uzluksiz yangi I-frame so'raydi.
@@ -283,9 +310,6 @@ class Camera:
         return (f"http://{self.branch.host}/ISAPI/Streaming/channels/{self.channel}"
                 f"/picture?videoResolutionWidth=1920&videoResolutionHeight=1080")
 
-    def start(self):
-        threading.Thread(target=self._grab, daemon=True).start()
-
     # fetch_once natijasi. "same" ni "fail" dan ajratish SHART: dublikat
     # kelishi kamera ishlayotganini bildiradi, uni offline deb belgilash xato.
     NEW, SAME, FAIL = "new", "same", "fail"
@@ -321,18 +345,6 @@ class Camera:
             self._raw = frame
         self._publish(frame)
         return self.NEW
-
-    def _grab(self):
-        """Fon oquvchi: kamera ochilmagan bo'lsa ham odam sanashga kadr beradi."""
-        sess = requests.Session()
-        sess.auth = HTTPDigestAuth(USER, PASSWORD)
-        while self.running:
-            if self.branch.focused_channel() == self.channel:
-                time.sleep(0.5)      # bu kamerani hovuz tortyapti
-                continue
-            if self.fetch_once(sess) == self.FAIL:
-                self.online = False
-            time.sleep(BG_INTERVAL)
 
     def _publish(self, frame):
         with self.lock:
