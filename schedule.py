@@ -208,7 +208,7 @@ def rooms_with_lessons(branch=None, day=None):
 def match_cameras(cameras, branch=None):
     """Xona nomlari kamera nomlariga tushdimi.
 
-    cameras — {kanal: nom} (nvr.CAMERAS).
+    cameras — {kanal: nom} (nvr.BRANCH_CAMERAS[filial]).
     Qaytaradi: (mos_kelgan {xona: kanal}, jadvalda_bor_kamerada_yo'q, aksincha)
     """
     by_name = {name: ch for ch, name in cameras.items()}
@@ -233,11 +233,14 @@ if __name__ == "__main__":
               f"{l['group_name']}  (mentor id={l['teacher_id']})")
     print()
 
-    matched, missing, unused = match_cameras(nvr.CAMERAS, branch=nvr.BRANCH)
-    print(f"── Kamera mosligi ({nvr.BRANCH} filiali)")
-    for room, ch in sorted(matched.items()):
-        print(f"   {room:<12} → kanal {ch}")
-    if missing:
-        print(f"   Jadvalda bor, kamerasi yo'q: {', '.join(missing)}")
-    if unused:
-        print(f"   Kamerasi bor, bugun darsi yo'q: {', '.join(unused)}")
+    for name in nvr.ENABLED:
+        matched, missing, unused = match_cameras(nvr.BRANCH_CAMERAS[name],
+                                                 branch=name)
+        print(f"── Kamera mosligi ({name} filiali)")
+        for room, ch in sorted(matched.items()):
+            print(f"   {room:<12} → kanal {ch}")
+        if missing:
+            print(f"   Jadvalda bor, kamerasi yo'q: {', '.join(missing)}")
+        if unused:
+            print(f"   Kamerasi bor, bugun darsi yo'q: {', '.join(unused)}")
+        print()

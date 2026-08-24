@@ -1,25 +1,29 @@
-"""Hikvision NVR — kadr olish infratuzilmasi.
+"""Hikvision NVR — kadr olish infratuzilmasi (bir nechta filial).
 
-demo.py dan ajratib olindi (imo-ishora mantiqisiz). Bu yerda faqat "kadrni
-qanday olish" masalasi: filiallar, xavfsiz so'rov, kamera oqimi.
+Har filialning O'Z NVR si bor, ya'ni o'z tezlik budjeti, o'z qulfi va o'z
+kameralari. Shuning uchun hamma narsa Branch ichida — global emas: bitta
+filial qulflansa boshqasi ishlayveradi.
 
-Ikki jonli o'lchov shu kodni belgilagan (2026-08-04):
+Ikki jonli o'lchov shu kodni belgilagan:
 
-  1) NVR qulflanadi. Hikvision ko'p bir vaqtdagi digest autentifikatsiyani
-     hujum deb biladi va akkauntni ~15 daqiqaga bloklaydi (Yunusobodda
-     shunday bo'ldi: lockStatus=lock, unlockTime=934). Shuning uchun bitta
-     sessiya, ulanish limiti va 401 kelganda to'xtash.
+  1) NVR qulflanadi (2026-08-04 va 2026-08-24 da ikki marta bo'ldi).
+     Hikvision ko'p bir vaqtdagi digest autentifikatsiyani hujum deb biladi
+     va akkauntni bloklaydi — o'lchandi: unlockTime=1563 sekund. Rad etilgan
+     har bir urinish qulfni YANA uzaytiradi, shuning uchun qulf sezilganda
+     butunlay to'xtaymiz va muddatni NVR ning o'zidan so'raymiz.
 
-  2) Tezlik budjeti. RTSP (554) yopiq, faqat snapshot bor. NVR ~17 kadr/sek
-     beradi, lekin BITTA oqim 7 kadrdan oshmaydi — shuning uchun ochilgan
-     kamera parallel oqimlar bilan tortiladi, fondagilar esa sekin. Aks holda
-     15 kamera budjetni bo'lib olib, hammasi qotib ko'rinadi.
+  2) Tezlik budjeti (Yunusobod, 2026-08-24, kanal 1601):
+         1 oqim   7.1 kadr/sek       3 oqim  16.9  <- to'yinish
+         2 oqim  12.4                4 oqim  16.5  (foyda yo'q)
+     Ya'ni NVR ~17 kadr/sek beradi, lekin BITTA ulanish 7.1 dan oshmaydi.
+     Shuning uchun ochilgan kamera parallel oqimlar bilan tortiladi.
+     requestKeyFrame ATAYLAB ishlatilmaydi: u tezlikni 7.1 -> 6.1 ga
+     tushiradi (har kadrga qo'shimcha PUT), kechikish esa baribir kichik.
 """
 import os
 import re
 import time
 import threading
-
 from collections import deque
 
 import cv2
@@ -27,212 +31,219 @@ import numpy as np
 import requests
 from requests.auth import HTTPDigestAuth
 
-# ── Filiallar ────────────────────────────────────────────────────────
-BRANCHES = {
-    "Yunusobod": {
-        "host": "192.168.90.251",
-        "cameras": {
-            "101": "Admin-kassa", "201": "Coworking 1", "301": "A2", "401": "A4",
-            "601": "Admin", "901": "A5", "1001": "B2", "1101": "B4",
-            "1201": "Coworking", "1301": "Oshxona", "1401": "Admin 2",
-            "1501": "B1", "1601": "B3", "1701": "A2 (2)", "1801": "A1",
-        },
-    },
-    "Oybek": {
-        "host": "oybek.marsits.uz:8080",
-        "cameras": {"101": "Kirish", "201": "Zal", "401": "Koridor", "501": "Xona"},
-    },
-    "Chilonzor": {
-        "host": "192.168.68.251",
-        "cameras": {
-            "101": "Stage-3", "201": "Saturn", "301": "Camera 01", "401": "Jupiter",
-            "501": "Earth", "601": "Kitchen", "701": "Stage-3 (2)", "801": "Neptun",
-            "901": "Administration", "1001": "Venera", "1101": "Toilet/Library",
-            "1201": "Co-Working", "1301": "Co-Working (2)", "1401": "Mercury",
-            "1501": "Co-Working (3)", "1601": "Kassa",
-        },
-    },
-}
-
-BRANCH = os.environ.get("BRANCH", "Oybek")
-HOST = os.environ.get("NVR_HOST", BRANCHES[BRANCH]["host"])
 USER = os.environ.get("NVR_USER", "operator")
 PASSWORD = os.environ.get("NVR_PASS", "0perator1audit")
-CAMERAS = BRANCHES[BRANCH]["cameras"]
 
-# ── Tezlik budjeti ───────────────────────────────────────────────────
-# Jonli o'lchandi (Yunusobod, 2026-08-24, kanal 1601):
-#     1 oqim          7.1 kadr/sek
-#     2 oqim          12.4
-#     3 oqim          16.9   <- to'yinish nuqtasi
-#     4 oqim          16.5   (foyda yo'q, faqat ulanish sarflaydi)
-# Ya'ni NVR ~17 kadr/sek beradi. Eskirgan izohdagi "~9 kadr/sek" xato edi.
-#
-# Ochilgan kameraga PARALLEL oqim beriladi — bitta oqim 7 kadrdan oshmaydi,
-# uchtasi esa 17 gacha chiqadi. Fondagilar sekin so'raladi: ular faqat odam
-# sanash uchun kerak, sekundiga bir marta yangilanishi shart emas.
-MAX_CONN = 6              # NVR ga bir vaqtda shuncha so'rov (3 fokus + fon)
+BRANCH_HOSTS = {
+    "Yunusobod": "192.168.90.251",
+    "Chilonzor": "192.168.68.251",
+    # Oybek tashqi manzilda va ofis tarmog'idan ochilmaydi (sinaldi: 8080 yopiq).
+    "Oybek": "oybek.marsits.uz:8080",
+}
+
+BRANCH_CAMERAS = {
+    "Yunusobod": {
+        "101": "Admin-kassa", "201": "Coworking 1", "301": "A2", "401": "A4",
+        "601": "Admin", "901": "A5", "1001": "B2", "1101": "B4",
+        "1201": "Coworking", "1301": "Oshxona", "1401": "Admin 2",
+        "1501": "B1", "1601": "B3", "1701": "A2 (2)", "1801": "A1",
+    },
+    "Chilonzor": {
+        "101": "Stage-3", "201": "Saturn", "301": "Camera 01", "401": "Jupiter",
+        "501": "Earth", "601": "Kitchen", "701": "Stage-3 (2)", "801": "Neptun",
+        "901": "Administration", "1001": "Venera", "1101": "Toilet/Library",
+        "1201": "Co-Working", "1301": "Co-Working (2)", "1401": "Mercury",
+        "1501": "Co-Working (3)", "1601": "Kassa",
+    },
+    "Oybek": {"101": "Kirish", "201": "Zal", "401": "Koridor", "501": "Xona"},
+}
+
+# Qaysi filiallar ishga tushadi. Vergul bilan: BRANCHES="Yunusobod,Chilonzor"
+ENABLED = [b.strip() for b in
+           os.environ.get("BRANCHES", "Yunusobod,Chilonzor").split(",")
+           if b.strip() in BRANCH_HOSTS]
+
+MAX_CONN = 6              # bitta NVR ga bir vaqtda shuncha so'rov
 FOCUS_WORKERS = 3         # ochilgan kamerani shuncha oqim bilan tortamiz
 # Odam sanash — asosiy funksiya, shuning uchun fon kameralari kamera ochilganda
-# ham SEKINLASHMAYDI. 15 kamera 10 sekundda = 1.5 so'rov/sek, budjet ~17 —
-# ochilgan kameraga qolgani yetib ortadi.
+# ham SEKINLASHMAYDI. 15 kamera 10 sekundda = 1.5 so'rov/sek, budjet ~17.
 BG_INTERVAL = 10.0
 FOCUS_TTL = 6.0           # brauzer jim qolsa fokus bekor bo'ladi
-
-_gate = threading.Semaphore(MAX_CONN)
-_locked_until = [0.0]
-
-FOCUS = {"channel": None, "until": 0.0}
-REGISTRY = {}             # kanal -> Camera (fokus hovuzi shundan topadi)
-
-
-def focus(channel):
-    FOCUS.update(channel=channel, until=time.time() + FOCUS_TTL)
-
-
-def focused_channel():
-    return FOCUS["channel"] if time.time() < FOCUS["until"] else None
-
-
-def get(sess, url):
-    """NVR ga xavfsiz so'rov: ulanish limiti + qulflanishni sezish.
-
-    401 kelsa NVR akkauntni bloklagan bo'ladi. Qayta urinish qulfni faqat
-    uzaytiradi, shuning uchun butunlay to'xtaymiz — va NVR ning O'ZIDAN
-    qulf qachon ochilishini so'raymiz.
-
-    Ilgari bu yerda qat'iy 60 sekund yozilgan edi. Bu xato: haqiqiy qulf
-    ~15-26 daqiqa bo'ladi (o'lchandi: unlockTime=1563), ya'ni 60 sekunddan
-    keyin 15 kamera yana urinib, qulfni qayta boshlatardi.
-    """
-    if time.time() < _locked_until[0]:
-        return None
-    with _gate:
-        try:
-            r = sess.get(url, timeout=10)
-        except Exception:
-            return None
-    if r.status_code == 401:
-        note_lockout()
-        return None
-    if r.status_code == 200 and r.content[:2] == b"\xff\xd8":
-        return r.content
-    return None
-
-
-_lock_check = [0.0]
-
-
-def note_lockout():
-    """401 kelganda: NVR dan qulf muddatini so'rab, shungacha to'xtaymiz."""
-    now = time.time()
-    if now - _lock_check[0] < 30:      # tekshiruvning o'zi ham so'rov — kamdan-kam
-        _locked_until[0] = max(_locked_until[0], now + 60)
-        return
-    _lock_check[0] = now
-    left = lock_seconds_left()
-    _locked_until[0] = now + (left + 15 if left else 120)
-    if left:
-        print(f"[nvr] akkaunt qulflandi — {left} sekunddan keyin qayta urinamiz")
-
-
-def check_lock_at_startup():
-    """Ishga tushishda bir marta qulfni tekshiradi.
-
-    Aks holda 15 kamera bir vaqtda so'rov yuborib, 15 ta 401 oladi va
-    qulf muddati yana uzayadi. Bitta tekshiruv — 15 ta xato so'rovdan arzon.
-    """
-    left = lock_seconds_left()
-    if left:
-        _locked_until[0] = time.time() + left + 15
-        print(f"[nvr] akkaunt qulflangan — {left} sek ({left // 60} daqiqa). "
-              f"Kameralar qulf ochilgach o'zi ishga tushadi.")
-    return left
-
-
-def lock_state():
-    """(qulflanganmi, qolgan sekund) — dashboardda ko'rsatish uchun."""
-    left = _locked_until[0] - time.time()
-    return (left > 0, int(max(0, left)))
-
-
-def request_keyframe(sess, url):
-    """NVR ni darhol yangi I-frame yaratishga majburlaydi (kechikishga qarshi)."""
-    if time.time() < _locked_until[0]:
-        return
-    try:
-        with _gate:
-            sess.put(url, timeout=6)
-    except Exception:
-        pass
-
-
-def lock_seconds_left():
-    """NVR qulfi qolgan vaqti (sekund). Qulf bo'lmasa 0."""
-    try:
-        r = requests.get(f"http://{HOST}/ISAPI/Security/userCheck",
-                         auth=HTTPDigestAuth(USER, PASSWORD), timeout=6)
-        if "<lockStatus>lock</lockStatus>" in r.text:
-            m = re.search(r"<unlockTime>(\d+)</unlockTime>", r.text)
-            return int(m.group(1)) if m else 60
-    except Exception:
-        pass
-    return 0
+REACH_TIMEOUT = 4         # filial ulanadimi — shuncha kutamiz
 
 
 def placeholder(text="Ulanmoqda..."):
     img = np.zeros((360, 640, 3), dtype=np.uint8)
     img[:] = (26, 22, 18)
-    cv2.putText(img, text, (170, 190), cv2.FONT_HERSHEY_SIMPLEX,
-                0.9, (150, 150, 150), 2)
+    cv2.putText(img, text, (150, 190), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (150, 150, 150), 2)
     return cv2.imencode(".jpg", img)[1].tobytes()
 
 
 PLACEHOLDER = placeholder()
+OFFLINE_JPEG = placeholder("Ulanmadi")
+
+
+class Branch:
+    """Bitta filialning NVR si: kameralari, budjeti, qulfi."""
+
+    def __init__(self, name, host, cameras, on_frame=None):
+        self.name = name
+        self.host = host
+        self.on_frame = on_frame
+        self.gate = threading.Semaphore(MAX_CONN)
+        self.locked_until = 0.0
+        self._lock_checked = 0.0
+        self.reachable = None          # None = hali tekshirilmagan
+        self.focus = {"channel": None, "until": 0.0}
+        self.cameras = {ch: Camera(self, ch, nm) for ch, nm in cameras.items()}
+
+    # ── qulf ─────────────────────────────────────────────────────────
+    def lock_seconds_left(self):
+        """NVR qulfi qolgan vaqti (sekund). Qulf bo'lmasa 0."""
+        try:
+            r = requests.get(f"http://{self.host}/ISAPI/Security/userCheck",
+                             auth=HTTPDigestAuth(USER, PASSWORD), timeout=6)
+            if "<lockStatus>lock</lockStatus>" in r.text:
+                m = re.search(r"<unlockTime>(\d+)</unlockTime>", r.text)
+                return int(m.group(1)) if m else 60
+        except Exception:
+            pass
+        return 0
+
+    def note_lockout(self):
+        """401 kelganda: muddatni NVR dan so'rab, shungacha to'xtaymiz.
+
+        Ilgari bu yerda qat'iy 60 sekund yozilgan edi — xato: haqiqiy qulf
+        ~26 daqiqa bo'ladi, ya'ni kameralar bir daqiqadan keyin yana urinib
+        qulfni qayta boshlatardi.
+        """
+        now = time.time()
+        if now - self._lock_checked < 30:   # tekshiruvning o'zi ham so'rov
+            self.locked_until = max(self.locked_until, now + 60)
+            return
+        self._lock_checked = now
+        left = self.lock_seconds_left()
+        self.locked_until = now + (left + 15 if left else 120)
+        if left:
+            print(f"[{self.name}] akkaunt qulflandi — {left} sek "
+                  f"({left // 60} daqiqa) kutamiz")
+
+    def lock_state(self):
+        left = self.locked_until - time.time()
+        return (left > 0, int(max(0, left)))
+
+    # ── ishga tushish ────────────────────────────────────────────────
+    def probe(self):
+        """Filial ulanadimi va qulflanmaganmi — ishga tushishda bir marta.
+
+        Bitta tekshiruv 15 ta xato so'rovdan arzon: qulflangan NVR ga
+        birdaniga 15 kamera urilsa, har biri 401 olib qulfni uzaytiradi.
+        """
+        try:
+            requests.get(f"http://{self.host}/ISAPI/System/deviceInfo",
+                         auth=HTTPDigestAuth(USER, PASSWORD),
+                         timeout=REACH_TIMEOUT)
+            self.reachable = True
+        except Exception:
+            self.reachable = False
+            print(f"[{self.name}] NVR ulanmadi ({self.host}) — "
+                  f"bu filial kameralari bo'sh turadi")
+            return
+        left = self.lock_seconds_left()
+        if left:
+            self.locked_until = time.time() + left + 15
+            print(f"[{self.name}] akkaunt qulflangan — {left} sek "
+                  f"({left // 60} daqiqa). Qulf ochilgach o'zi tiklanadi.")
+
+    def start(self):
+        self.probe()
+        for cam in self.cameras.values():
+            cam.start()
+        for _ in range(FOCUS_WORKERS):
+            threading.Thread(target=self._focus_worker, daemon=True).start()
+
+    # ── fokus ────────────────────────────────────────────────────────
+    def set_focus(self, channel):
+        self.focus.update(channel=channel, until=time.time() + FOCUS_TTL)
+
+    def focused_channel(self):
+        return self.focus["channel"] if time.time() < self.focus["until"] else None
+
+    def _focus_worker(self):
+        """Ochilgan kamerani tortadigan umumiy oqim.
+
+        Nima uchun umumiy: har kameraga o'z oqimlarini bersak 15x3=45 ip
+        bo'lardi va bo'sh turgan 42 tasi GIL ni band qilib, yetkazishni
+        15 dan 9 kadr/sekka tushirardi (o'lchandi).
+        """
+        sess = requests.Session()
+        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        while True:
+            ch = self.focused_channel()
+            cam = self.cameras.get(ch) if ch else None
+            if cam is None:
+                time.sleep(0.25)
+                continue
+            if not cam.fetch_once(sess):
+                time.sleep(0.1)
+
+    # ── so'rov ───────────────────────────────────────────────────────
+    def get(self, sess, url):
+        """Xavfsiz so'rov: ulanish limiti + qulflanishni sezish."""
+        if time.time() < self.locked_until or self.reachable is False:
+            return None
+        with self.gate:
+            try:
+                r = sess.get(url, timeout=10)
+            except Exception:
+                return None
+        if r.status_code == 401:
+            self.note_lockout()
+            return None
+        if r.status_code == 200 and r.content[:2] == b"\xff\xd8":
+            return r.content
+        return None
 
 
 class Camera:
     """Bitta kanal: kadr oladi, oxirgi topilmalarni ustiga chizib e'lon qiladi.
 
     Ko'rsatish tezligi (kadr olish) va tahlil tezligi (YOLO/yuz) ataylab
-    ajratilgan — tahlil ulgurmasa ham video qotib qolmaydi, oxirgi natija
-    yangi kadr ustiga chiziladi.
+    ajratilgan — tahlil ulgurmasa ham video qotib qolmaydi.
     """
 
-    def __init__(self, channel, on_frame=None):
+    def __init__(self, branch, channel, name=None):
+        self.branch = branch
         self.channel = channel
-        self.name = CAMERAS.get(channel, channel)
-        self.on_frame = on_frame     # annotatsiya chizuvchi: f(frame, state) -> frame
+        self.name = name or channel
         self.jpeg = None
         self.seq = 0
         self.online = False
-        self.state = {}              # tahlil natijasi (detektorlar to'ldiradi)
+        self.state = {}
         self.fps = 0.0
         self.lock = threading.Lock()
         self._raw = None
         self._raw_lock = threading.Lock()
-        self._stamps = deque(maxlen=20)   # oxirgi kadr vaqtlari (fps uchun)
+        self._stamps = deque(maxlen=20)
         self.running = True
-        # Har bir kamerada BITTA fon oquvchi. Ochilgan kameraga qo'shimcha
-        # tezlikni umumiy hovuz beradi (_focus_pool) — har kameraga o'z
-        # oquvchilarini berish 15x3=45 ta ip hosil qilardi va ularning 42 tasi
-        # bekorga uyg'onib, GIL ni band qilardi (o'lchandi: 15 kadr ishlab
-        # chiqarilib, brauzerga 9 tasi yetardi).
-        threading.Thread(target=self._grab, daemon=True).start()
-        REGISTRY[channel] = self
+
+    @property
+    def key(self):
+        """Filiallar aralashmasin: kanal raqamlari filiallarda takrorlanadi."""
+        return f"{self.branch.name}/{self.channel}"
 
     @property
     def url(self):
-        return (f"http://{HOST}/ISAPI/Streaming/channels/{self.channel}"
+        return (f"http://{self.branch.host}/ISAPI/Streaming/channels/{self.channel}"
                 f"/picture?videoResolutionWidth=1920&videoResolutionHeight=1080")
 
-    @property
-    def keyframe_url(self):
-        return f"http://{HOST}/ISAPI/Streaming/channels/{self.channel}/requestKeyFrame"
+    def start(self):
+        threading.Thread(target=self._grab, daemon=True).start()
 
     def fetch_once(self, sess):
-        """Bitta kadr olib, e'lon qiladi. True — muvaffaqiyat."""
-        data = get(sess, self.url)
+        """Bitta kadr olib e'lon qiladi. True — muvaffaqiyat."""
+        data = self.branch.get(sess, self.url)
         if data is None:
             return False
         frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
@@ -245,20 +256,12 @@ class Camera:
         return True
 
     def _grab(self):
-        """Fon oquvchi: kamera ochilmagan bo'lsa ham odam sanashga kadr beradi.
-
-        requestKeyFrame ATAYLAB olib tashlandi: o'lchovda u tezlikni
-        7.1 -> 6.1 kadr/sek ga tushirdi (har kadrga qo'shimcha PUT so'rovi).
-        Uzluksiz tortganda kechikish baribir kichik — keyingi kadr ~0.15
-        sekunddan keyin keladi.
-        """
+        """Fon oquvchi: kamera ochilmagan bo'lsa ham odam sanashga kadr beradi."""
         sess = requests.Session()
         sess.auth = HTTPDigestAuth(USER, PASSWORD)
         while self.running:
-            active = focused_channel()
-            if active == self.channel:
-                # Ochilgan kamerani hovuz tortyapti — bu ip aralashmasin
-                time.sleep(0.5)
+            if self.branch.focused_channel() == self.channel:
+                time.sleep(0.5)      # bu kamerani hovuz tortyapti
                 continue
             if not self.fetch_once(sess):
                 self.online = False
@@ -267,7 +270,8 @@ class Camera:
     def _publish(self, frame):
         with self.lock:
             state = dict(self.state)
-        vis = self.on_frame(frame.copy(), state) if self.on_frame else frame
+        draw = self.branch.on_frame
+        vis = draw(frame.copy(), state) if draw else frame
         ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             return
@@ -292,28 +296,31 @@ class Camera:
 
     def snapshot(self):
         with self.lock:
-            return self.jpeg or PLACEHOLDER
+            if self.jpeg:
+                return self.jpeg
+        return OFFLINE_JPEG if self.branch.reachable is False else PLACEHOLDER
 
 
-# ── Fokus hovuzi ─────────────────────────────────────────────────────
-# Ochilgan kamerani tortadigan umumiy oqimlar. Ular qaysi kamera ochilganini
-# har safar tekshiradi, shuning uchun kamera almashsa ham qo'shimcha ip
-# yaratilmaydi. Nima uchun umumiy: har kameraga o'z oqimlarini bersak
-# 15x3=45 ip bo'lardi va bo'sh turgan 42 tasi GIL ni band qilib, yetkazish
-# tezligini 15 dan 9 kadr/sekka tushirardi.
-def _focus_pool_worker():
-    sess = requests.Session()
-    sess.auth = HTTPDigestAuth(USER, PASSWORD)
-    while True:
-        ch = focused_channel()
-        cam = REGISTRY.get(ch) if ch else None
-        if cam is None:
-            time.sleep(0.25)
-            continue
-        if not cam.fetch_once(sess):
-            time.sleep(0.1)
+# ── Filiallarni yig'ish ──────────────────────────────────────────────
+BRANCHES = {}
 
 
-def start_focus_pool(workers=FOCUS_WORKERS):
-    for _ in range(workers):
-        threading.Thread(target=_focus_pool_worker, daemon=True).start()
+def build(on_frame=None):
+    """ENABLED dagi filiallarni yaratadi va ishga tushiradi."""
+    for name in ENABLED:
+        BRANCHES[name] = Branch(name, BRANCH_HOSTS[name],
+                                BRANCH_CAMERAS[name], on_frame=on_frame)
+    for br in BRANCHES.values():
+        br.start()
+    return BRANCHES
+
+
+def all_cameras():
+    """{'Filial/kanal': Camera} — barcha filiallardagi kameralar."""
+    return {cam.key: cam for br in BRANCHES.values()
+            for cam in br.cameras.values()}
+
+
+def find(branch, channel):
+    br = BRANCHES.get(branch)
+    return br.cameras.get(channel) if br else None

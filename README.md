@@ -18,10 +18,19 @@ yangi ro'yxat bilan ishlaydi. Kodga tegish shart emas.
 ## Ishga tushirish
 
 ```bash
-BRANCH=Yunusobod ./venv/bin/python app.py     # brauzer: localhost:5001
+./venv/bin/python app.py                      # brauzer: localhost:5001
 ```
 
-Filiallar: `Yunusobod`, `Chilonzor`, `Oybek`.
+Standart holda Yunusobod va Chilonzor birga ishga tushadi, sahifa tepasidan
+tanlanadi. Boshqacha kerak bo'lsa:
+
+```bash
+BRANCHES="Chilonzor" ./venv/bin/python app.py
+```
+
+Har filialning o'z NVR si, o'z tezlik budjeti va o'z qulfi bor — biri
+qulflansa ikkinchisi ishlayveradi. Oybek (`oybek.marsits.uz:8080`) ofis
+tarmog'idan ochilmaydi.
 
 ## Qismlari
 
@@ -89,7 +98,11 @@ bo'lmasa ehtiyotkor qiymat olingan va `detectors.py` da izohlangan.
   shuning uchun eski `has_badge()` olib tashlandi, qayta yozilishi kerak.
 - **Ovoz yo'q.** Ataylab: ovozga tayanadigan qoidalar hozircha qamrovdan tashqarida.
 - **Zona xaritasi qo'lda.** `detectors.ZONES` — qaysi kamera nimani ko'radi.
-  Kamera qo'shilsa shu yerga yozish kerak.
+  Kamera qo'shilsa shu yerga yozish kerak. Chilonzor zonalari kamera
+  nomlaridan taxmin qilingan, joyida tekshirilmagan.
+- **NVR qulflanadi.** Hikvision ko'p parallel digest so'rovni hujum deb biladi
+  va akkauntni ~26 daqiqaga bloklaydi. Kod buni sezadi va qulf ochilishini
+  kutadi, lekin qo'lda ko'p so'rov yubormaslik kerak.
 
 ## Bazadagi muammolar (kamera aybi emas)
 

@@ -80,42 +80,50 @@ def draw(frame, state):
     return frame
 
 
-nvr.check_lock_at_startup()      # qulflangan NVR ga 15 ta so'rov urmaymiz
-CAMERAS = {ch: nvr.Camera(ch, on_frame=draw) for ch in nvr.CAMERAS}
-nvr.start_focus_pool()
+nvr.build(on_frame=draw)         # filiallarni yaratadi va ishga tushiradi
+CAMERAS = nvr.all_cameras()      # {'Filial/kanal': Camera}
 _last_analyzed = {}
 
 
 def analyzer():
-    """Bitta GPU — kameralarni navbat bilan tahlil qiladi, ochilgani birinchi."""
+    """Bitta GPU — kameralarni navbat bilan tahlil qiladi, ochilgani birinchi.
+
+    Barcha filiallar bitta navbatda: GPU bitta, ikkita analizator ip ochish
+    faqat bir-birini kutishga olib keladi.
+    """
     pose.model()          # oldindan yuklab qo'yamiz
     faces._models()
     order = list(CAMERAS)
     i = 0
     while True:
-        ch = nvr.focused_channel()
-        if ch is None or CAMERAS[ch]._raw is None:
-            ch = order[i % len(order)]
+        cam = None
+        for br in nvr.BRANCHES.values():        # ochilgan kamera navbatsiz
+            ch = br.focused_channel()
+            if ch and br.cameras[ch]._raw is not None:
+                cam = br.cameras[ch]
+                break
+        if cam is None:
+            cam = CAMERAS[order[i % len(order)]]
             i += 1
-        cam = CAMERAS[ch]
 
-        if time.time() - _last_analyzed.get(ch, 0) < ANALYZE_INTERVAL:
+        if time.time() - _last_analyzed.get(cam.key, 0) < ANALYZE_INTERVAL:
             time.sleep(0.05)
             continue
         frame = cam.take_frame()
         if frame is None:
             time.sleep(0.02)
             continue
-        _last_analyzed[ch] = time.time()
+        _last_analyzed[cam.key] = time.time()
 
+        branch = cam.branch.name
         try:
             persons = pose.people(pose.infer(frame))
-            found = faces.identify(frame, branch=nvr.BRANCH)
+            found = faces.identify(frame, branch=branch)
         except Exception as e:
-            print(f"[analyzer] {ch} tahlil xatosi: {e}")
+            print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
 
-        ctx = detectors.Context(branch=nvr.BRANCH, channel=ch,
+        ctx = detectors.Context(branch=branch, channel=cam.channel,
                                 camera_name=cam.name, faces=found, persons=persons)
         events = detectors.run(ctx)
 
@@ -127,12 +135,13 @@ def analyzer():
 
         for ev in events:
             ev["camera"] = cam.name
-            ev["channel"] = ch
+            ev["channel"] = cam.channel
+            ev["branch"] = branch
             vis = draw(frame.copy(), {"faces": found, "persons": persons,
                                       "events": [ev]})
             ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 82])
             add_event(ev, buf.tobytes() if ok else b"")
-            print(f"[hodisa] {ev['rule_number']} ({ev['rule_type']}, "
+            print(f"[hodisa] {branch}/{ev['rule_number']} ({ev['rule_type']}, "
                   f"{ev['score']} ball) — {ev['reason']}")
 
 
@@ -149,6 +158,10 @@ PAGE = """
    gap:16px;align-items:baseline;flex-wrap:wrap}
  h1{font-size:16px;margin:0;font-weight:600}
  .total{font-size:14px} .total b{font-size:22px;margin-right:4px}
+ #tabs{display:flex;gap:6px}
+ #tabs button{background:transparent;color:var(--dim);border:1px solid var(--line);
+   border-radius:20px;padding:4px 14px;cursor:pointer;font-size:13px}
+ #tabs button.act{background:var(--card);color:var(--fg);border-color:#6b5b45}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
@@ -191,6 +204,7 @@ PAGE = """
 </style>
 <header>
   <h1>MARS audit kamerasi</h1>
+  <span id=tabs></span>
   <span class=total><b id=total>0</b> odam</span>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
@@ -206,7 +220,19 @@ PAGE = """
 </main>
 <script>
 const grid=document.getElementById('grid'), evbox=document.getElementById('events');
-let built=false;
+let built=false, branch=null;
+function buildTabs(list){
+  const box=document.getElementById('tabs');
+  if(box.childElementCount===list.length) return;
+  box.innerHTML='';
+  for(const b of list){
+    const t=document.createElement('button');
+    t.textContent=b;
+    t.onclick=()=>{ if(branch===b) return;
+      branch=b; built=false; closeBig(); grid.innerHTML=''; tick(); };
+    box.appendChild(t);
+  }
+}
 function build(cams){
   grid.innerHTML='';
   for(const c of cams){
@@ -227,7 +253,8 @@ function build(cams){
 let bigCh=null;
 function openBig(ch,name){
   bigCh=ch;
-  document.getElementById('bigimg').src='/stream/'+ch+'?big=1';
+  document.getElementById('bigimg').src=
+    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1';
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
@@ -238,15 +265,21 @@ function closeBig(){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 async function tick(){
-  const s=await (await fetch('/state')).json();
+  const s=await (await fetch('/state'+(branch?'?branch='+encodeURIComponent(branch):''))).json();
+  branch=s.branch;
+  buildTabs(s.branches);
+  for(const t of document.getElementById('tabs').children)
+    t.classList.toggle('act', t.textContent===branch);
   if(!built) build(s.cameras);
   const total=s.cameras.reduce((a,c)=>a+c.count,0);
   document.getElementById('total').textContent=total;
+  const warn = s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa qoldi`
+             : (!s.reachable ? 'NVR ga ulanmadi' : '');
   document.getElementById('meta').textContent =
-    (s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa qoldi · ` : '') +
-    `${s.branch} · ${s.online}/${s.cameras.length} kamera · `+
+    (warn ? warn+' · ' : '') +
+    `${s.online}/${s.cameras.length} kamera · `+
     `${s.rules} qoida · ${s.detectors} detektor`;
-  document.getElementById('meta').style.color = s.locked ? '#e08a8a' : '';
+  document.getElementById('meta').style.color = warn ? '#e08a8a' : '';
   for(const c of s.cameras){
     const el=document.getElementById('c'+c.channel);
     if(!el) continue;
@@ -260,7 +293,8 @@ async function tick(){
     // Katta ko'rinish ochiq bo'lsa grid kadrlarini so'ramaymiz — butun
     // tezlik budjeti ochilgan kameraga ketsin.
     if(bigCh===null)
-      document.getElementById('s'+c.channel).src='/still/'+c.channel+'?t='+Date.now();
+      document.getElementById('s'+c.channel).src=
+        '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh)
       document.getElementById('bigfps').textContent=c.fps+' kadr/sek';
   }
@@ -286,37 +320,36 @@ def index():
 
 @app.get("/state")
 def state():
+    """Bitta filial holati. ?branch=Nomi — qaysi filial (birinchisi standart)."""
+    name = request.args.get("branch") or (nvr.ENABLED[0] if nvr.ENABLED else "")
+    br = nvr.BRANCHES.get(name)
     with _events_lock:
-        events = list(EVENTS)[:20]
+        events = [e for e in EVENTS if e.get("branch") == name][:20]
     hits = {e["channel"] for e in events[:6]}
     cams = []
-    for ch, cam in CAMERAS.items():
+    for cam in (br.cameras.values() if br else []):
         st = cam.state
         cams.append({
-            "channel": ch, "name": cam.name, "online": cam.online,
-            "zone": detectors.ZONES.get(nvr.BRANCH, {}).get(ch),
+            "channel": cam.channel, "name": cam.name, "online": cam.online,
+            "zone": detectors.ZONES.get(name, {}).get(cam.channel),
             "count": st.get("count", 0), "named": st.get("named", []),
             "identity": st.get("identity", False),
             "fps": round(cam.fps, 1),
             "face_px": st.get("face_px", 0),
-            "hit": ch in hits,
+            "hit": cam.channel in hits,
         })
     done, _ = detectors.status()
-    locked, left = nvr.lock_state()
-    return jsonify(branch=nvr.BRANCH, cameras=cams, events=events,
+    locked, left = br.lock_state() if br else (False, 0)
+    return jsonify(branch=name, branches=list(nvr.BRANCHES),
+                   reachable=(br.reachable is not False) if br else False,
+                   cameras=cams, events=events,
                    online=sum(1 for c in cams if c["online"]),
                    locked=locked, lock_left=left,
                    rules=len(rules.load()), detectors=len(done))
 
 
-@app.post("/focus/<channel>")
-def focus(channel):
-    nvr.focus(channel)
-    return jsonify(ok=True)
-
-
-@app.get("/still/<channel>")
-def still(channel):
+@app.get("/still/<branch>/<channel>")
+def still(branch, channel):
     """Bitta kadr. Grid shuni ishlatadi — oqim EMAS.
 
     Ilgari grid 15 ta MJPEG oqimini bir vaqtda ochardi. Har oqim Flask ipini
@@ -324,16 +357,16 @@ def still(channel):
     qop-qora edi va /state hammasini "offline" deb ko'rsatardi. Bitta kadr
     so'rovi ulanishni ushlab turmaydi.
     """
-    cam = CAMERAS.get(channel)
+    cam = nvr.find(branch, channel)
     if cam is None:
         return "yo'q", 404
     return Response(cam.snapshot(), mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
 
 
-@app.get("/stream/<channel>")
-def stream(channel):
-    cam = CAMERAS.get(channel)
+@app.get("/stream/<branch>/<channel>")
+def stream(branch, channel):
+    cam = nvr.find(branch, channel)
     if cam is None:
         return "yo'q", 404
     big = request.args.get("big") == "1"
@@ -346,7 +379,7 @@ def stream(channel):
             # so'nardi, ya'ni amalda hech qachon ishlamasdi: 15 kamera
             # birdek sekin so'ralib, hammasi 0.7 kadr/sek edi.
             if big:
-                nvr.focus(channel)
+                cam.branch.set_focus(channel)
             if cam.seq != last:
                 last = cam.seq
                 yield (b"--f\r\nContent-Type: image/jpeg\r\n\r\n"
@@ -368,7 +401,9 @@ def shot(eid):
 
 if __name__ == "__main__":
     done, todo = detectors.status()
-    print(f"Filial: {nvr.BRANCH} · {len(nvr.CAMERAS)} kamera")
+    for nm, br in nvr.BRANCHES.items():
+        mark = "" if br.reachable else "  (ULANMADI)"
+        print(f"Filial: {nm} · {len(br.cameras)} kamera{mark}")
     print(f"Qoidalar: {len(rules.load())} ta (Mars API)")
     print(f"Detektor: {len(done)} qoida qoplangan, {len(todo)} tasi hali yozilmagan")
     print(f"Yuz bazasi: {len(faces.known_faces())} xodim")
