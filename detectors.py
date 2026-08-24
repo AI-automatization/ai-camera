@@ -219,7 +219,8 @@ class LessonStart(Detector):
         if empty and seconds >= schedule.LATE_START_MIN * 60:
             ev = self.event("3.1", lesson.get("group_name") or ctx.room,
                             f"{ctx.room}: dars {lesson['start']} da boshlanishi kerak edi, "
-                            f"{late_by:.0f} daqiqadan beri xona bo'sh", seconds, now=ctx.now.timestamp())
+                            f"{late_by:.0f} daqiqadan beri xona bo'sh", seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 
@@ -241,7 +242,8 @@ class LeftRoom(Detector):
         if away and seconds >= schedule.AWAY_MIN * 60:
             ev = self.event("3.3", lesson.get("group_name") or ctx.room,
                             f"{ctx.room}: dars ketyapti, xonada {ctx.head_count} kishi bor, "
-                            f"lekin mentor {seconds/60:.0f} daqiqadan beri tanilmadi", seconds, now=ctx.now.timestamp())
+                            f"lekin mentor {seconds/60:.0f} daqiqadan beri tanilmadi", seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 
@@ -266,7 +268,8 @@ class AloneWithStudent(Detector):
             who = ctx.named[0]
             ev = self.event("3.5", who,
                             f"{ctx.room}: {who} xonada bitta o'quvchi bilan "
-                            f"{seconds/60:.0f} daqiqadan beri yolg'iz", seconds, now=ctx.now.timestamp())
+                            f"{seconds/60:.0f} daqiqadan beri yolg'iz", seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 
@@ -286,7 +289,8 @@ class AdminZoneLoitering(Detector):
             if seconds >= ADMIN_LOITER_MIN * 60:
                 ev = self.event("3.8", name,
                                 f"{ctx.camera_name}: {name} administratsiya zonasida "
-                                f"{seconds/60:.0f} daqiqadan beri", seconds, now=ctx.now.timestamp())
+                                f"{seconds/60:.0f} daqiqadan beri", seconds,
+                            now=ctx.now.timestamp())
                 if ev:
                     out.append(ev)
         # Ketganlarni tozalash
@@ -342,7 +346,8 @@ class LessonOverrun(Detector):
             if still_going and seconds >= 60:
                 ev = self.event("2.8", ctx.named[0] if ctx.named else ctx.room,
                                 f"{ctx.room}: dars {lesson['end']} da tugashi kerak edi, "
-                                f"{over_min:.0f} daqiqa oshdi", seconds, now=ctx.now.timestamp())
+                                f"{over_min:.0f} daqiqa oshdi", seconds,
+                            now=ctx.now.timestamp())
                 return [ev] if ev else []
         return []
 
@@ -368,7 +373,8 @@ class Sleeping(Detector):
             who = ctx.named[0] if ctx.named else f"{ctx.camera_name} ({len(sleeping)} kishi)"
             ev = self.event(number, who,
                             f"{ctx.camera_name}: bosh {seconds/60:.0f} daqiqadan beri "
-                            f"pastda — uxlayotgan bo'lishi mumkin", seconds, now=ctx.now.timestamp())
+                            f"pastda — uxlayotgan bo'lishi mumkin", seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 
@@ -395,7 +401,8 @@ class MentorSeated(Detector):
             ev = self.event("2.10", ctx.named[0],
                             f"{ctx.room}: dars davomida hech kim turmadi "
                             f"({seconds/60:.0f} daqiqa) — mentor o'tirib o'tgan bo'lishi mumkin",
-                            seconds, now=ctx.now.timestamp())
+                            seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 
@@ -416,7 +423,8 @@ class CoworkingGathering(Detector):
         if active and seconds >= GATHERING_MIN * 60:
             ev = self.event("2.5", ", ".join(ctx.named[:4]),
                             f"{ctx.camera_name}: {staff} xodim {seconds/60:.0f} "
-                            f"daqiqadan beri yig'ilib turibdi", seconds, now=ctx.now.timestamp())
+                            f"daqiqadan beri yig'ilib turibdi", seconds,
+                            now=ctx.now.timestamp())
             return [ev] if ev else []
         return []
 

@@ -188,13 +188,20 @@ def _token(refresh=False) -> str:
     return _login()
 
 
+# Mars API eskirgan/buzuq token uchun 403 qaytaradi, 401 emas (sinab ko'rilgan:
+# buzuq token -> 403 Forbidden). Faqat 401 ni kutgan kod tokenni hech qachon
+# yangilamas va kamera qoidasiz qolardi. Shuning uchun ikkalasi ham.
+_AUTH_FAIL = (401, 403)
+
+
 def authed_get(url, **kwargs):
-    """Tokenli GET. 401 kelsa bir marta qayta login qilib urinadi."""
+    """Tokenli GET. Token rad etilsa bir marta qayta login qilib urinadi."""
+    r = None
     for refresh in (False, True):
         h = dict(HEADERS)
         h["Authorization"] = f"Bearer {_token(refresh=refresh)}"
         r = requests.get(url, headers=h, timeout=30, **kwargs)
-        if r.status_code != 401:
+        if r.status_code not in _AUTH_FAIL:
             r.raise_for_status()
             return r
     r.raise_for_status()
