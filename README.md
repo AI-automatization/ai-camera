@@ -46,6 +46,19 @@ qo'shilayotganda — va 8 sekund tinch tursa o'chadi. Kamera chirog'i bekorga
 yonib turmaydi. Birinchi ishlatishda macOS ruxsat so'raydi
 (System Settings > Privacy & Security > Camera).
 
+## Davomat
+
+Sahifada **"Davomat"** tugmasi — kunlik jadval: xodim, keldi (birinchi
+tanilgan vaqt), ketdi (oxirgi tanilgan vaqt), nechta ko'rinish, qaysi
+kamerada. Sana bo'yicha eski kunlarni ham ko'rsa bo'ladi.
+
+Yozuvlar `data/attendance/YYYY-MM-DD.json` da, API: `GET /attendance?date=`.
+
+Halol cheklov: bu "eshikdan kirdi-chiqdi" emas — "yuz tanish ishlaydigan
+kamera oldidan o'tdi" degani. Tanish faqat yuz katta ko'rinadigan
+kameralarda ishlaydi (kirish, coworking). Kirish eshigiga qaragan kamera
+qo'yilsa, haqiqiy keldi-kettiga aylanadi.
+
 ## Xodim qo'shish
 
 Sahifaning tepasidagi **"Xodimlar"** tugmasi. Ism yoziladi va

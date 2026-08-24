@@ -26,6 +26,7 @@ import numpy as np
 from flask import (Flask, Response, jsonify, render_template_string,
                    request, send_file)
 
+import attendance
 import nvr
 import rules
 import faces
@@ -181,6 +182,10 @@ def analyzer():
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
 
+        for f in found:
+            if f["name"]:
+                attendance.record(f["name"], branch, cam.name)
+
         ctx = detectors.Context(branch=branch, channel=cam.channel,
                                 camera_name=cam.name, faces=found, persons=persons)
         events = detectors.run(ctx)
@@ -246,8 +251,21 @@ PAGE = """
  #scanbtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
    border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
  #scanbtn:disabled{opacity:.5;cursor:default}
- #peoplebtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
+ #peoplebtn,#attbtn{background:var(--card);color:var(--fg);
+   border:1px solid var(--line);
    border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
+ #att{position:fixed;top:0;right:0;bottom:0;width:430px;background:var(--card);
+   border-left:1px solid var(--line);padding:16px;overflow:auto;display:none;z-index:8}
+ #att.on{display:block}
+ #att h2{font-size:15px;margin:0 0 4px}
+ #att select{background:#14110e;color:var(--fg);border:1px solid var(--line);
+   border-radius:6px;padding:6px 10px;font-size:13px;margin:8px 0}
+ #att table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+ #att th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;
+   padding:6px 4px;border-bottom:1px solid var(--line)}
+ #att td{padding:7px 4px;border-bottom:1px solid var(--line)}
+ #att td.t{font-variant-numeric:tabular-nums}
+ #att .cam{color:var(--dim);font-size:11px}
  #people{position:fixed;top:0;right:0;bottom:0;width:380px;background:var(--card);
    border-left:1px solid var(--line);padding:16px;overflow:auto;display:none;z-index:8}
  #people.on{display:block}
@@ -334,12 +352,22 @@ PAGE = """
   <span class=total><b id=total>0</b> odam</span>
   <button id=scanbtn onclick="doScan()">Sanash</button>
   <button id=peoplebtn onclick="togglePeople()">Xodimlar</button>
+  <button id=attbtn onclick="toggleAtt()">Davomat</button>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
 <div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><b id=bigcount>0</b><span class=dim>odam</span>
   <span class=dim id=bigfps></span><span class=dim id=bigage></span>
   <button onclick="closeBig()">Yopish</button></div></div>
+<aside id=att>
+  <h2>Davomat</h2>
+  <div class=hint>Keldi = shu kuni birinchi tanilgan vaqt. Ketdi = oxirgi
+    tanilgan vaqt. Tanish faqat yuz katta ko'rinadigan kameralarda ishlaydi —
+    kirish/coworking kameralari oldidan o'tganda qayd etiladi.</div>
+  <select id=attdate onchange="loadAtt()"></select>
+  <div id=atttable></div>
+  <div class=row><button onclick="toggleAtt()">Yopish</button></div>
+</aside>
 <aside id=people>
   <h2>Xodimlar</h2>
   <div class=hint>Mac kamerasi — sinash uchun. NVR kamerasida tanish
@@ -466,6 +494,31 @@ function closeBig(){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 let lastScan=-1;
+function toggleAtt(){
+  const p=document.getElementById("att");
+  p.classList.toggle("on");
+  if(p.classList.contains("on")) loadAtt();
+}
+async function loadAtt(){
+  const sel=document.getElementById("attdate");
+  const q=sel.value?("?date="+sel.value):"";
+  const d=await (await fetch("/attendance"+q)).json();
+  if(!sel.options.length || sel.options.length!==d.dates.length){
+    const cur=sel.value||d.date;
+    sel.innerHTML=d.dates.length
+      ? d.dates.map(x=>`<option ${x===cur?"selected":""}>${x}</option>`).join("")
+      : `<option>${d.date}</option>`;
+  }
+  document.getElementById("atttable").innerHTML = d.rows.length ? `
+    <table><tr><th>Xodim</th><th>Keldi</th><th>Ketdi</th><th></th></tr>
+    ${d.rows.map(r=>`<tr>
+      <td>${r.name}<div class=cam>${r.last_cam}</div></td>
+      <td class=t>${r.first.slice(0,5)}</td>
+      <td class=t>${r.last.slice(0,5)}</td>
+      <td class=cam>${r.seen}x</td></tr>`).join("")}
+    </table>`
+    : "<div class=hint style=margin-top:12px>Bu kunda yozuv yo'q</div>";
+}
 function togglePeople(){
   const p=document.getElementById("people");
   p.classList.toggle("on");
@@ -676,6 +729,7 @@ async function tick(){
     }
   }
   lastScan = s.scanned_ago;
+  if(document.getElementById("att").classList.contains("on")) loadAtt();
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
       <span class="tag ${e.rule_type}">${e.rule_number} · ${e.score} ball</span>
@@ -761,6 +815,15 @@ def still(branch, channel):
 
 
 # ── Xodimlarni ro'yxatga olish ───────────────────────────────────────
+@app.get("/attendance")
+def attendance_get():
+    """Kun davomati. ?date=YYYY-MM-DD — istalgan kun (standart: bugun)."""
+    d, data = attendance.day(request.args.get("date"))
+    rows = [dict(name=n, **e) for n, e in data.items()]
+    rows.sort(key=lambda r: r["first"])
+    return jsonify(date=d, rows=rows, dates=attendance.days())
+
+
 @app.get("/faces")
 def faces_list():
     return jsonify(people=faces.people(), branches=list(nvr.BRANCHES),

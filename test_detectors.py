@@ -216,6 +216,26 @@ def main():
     run("ro'yxatga olish chegarasi tanishnikidan qattiq",
         _f.MIN_ENROLL_PX > _f.MIN_RECOGNIZE_PX)
 
+    print("\n── Davomat")
+    import os, time as _t, shutil as _sh, datetime as _dt
+    import attendance as _att
+    _day=_dt.date.today().isoformat(); _p=_att._path(_day); _bak=None
+    if os.path.exists(_p): _bak=_p+".bak"; _sh.copy(_p,_bak)
+    try:
+        t0=_t.time()
+        _att.record("__SINOV__","F","K1",when=t0)
+        _att.record("__SINOV__","F","K1",when=t0+5)
+        _att.record("__SINOV__","F","K2",when=t0+3600)
+        _,_data=_att.day()
+        e=_data.get("__SINOV__")
+        run("birinchi ko'rinish = keldi", e is not None and e["first_cam"]=="F/K1")
+        run("oxirgi ko'rinish = ketdi", e["last_cam"]=="F/K2" and e["first"]!=e["last"])
+        run("ko'rinishlar sanaladi", e["seen"]==3)
+    finally:
+        if _bak: os.replace(_bak,_p)
+        elif os.path.exists(_p): os.remove(_p)
+        _att._cache.update(date=None, data={})
+
     print("\n── Dashboard skripti")
     run("brauzerdagi skript ishga tushadi", _page_js_ok())
 
