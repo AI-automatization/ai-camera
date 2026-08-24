@@ -45,6 +45,12 @@ _det = _rec = None
 _lock = threading.Lock()
 
 
+def load_models():
+    """Modellarni yuklaydi. ASOSIY IPDA, boshqa modellardan alohida
+    chaqirilishi kerak — bir vaqtda yuklash MPS/CoreML ni buzadi."""
+    return _models()
+
+
 def _models():
     global _det, _rec
     with _lock:
@@ -186,6 +192,10 @@ if __name__ == "__main__":
 
 # ── Ro'yxatga olish ──────────────────────────────────────────────────
 MIN_ENROLL_PX = 100     # ro'yxatga olishda yuz shundan katta bo'lsin
+# Ketma-ket kadrlar deyarli bir xil bo'ladi. Bir xil namunani o'nlab marta
+# saqlash bazani shishiradi va tanishga hech narsa qo'shmaydi — foydasi
+# TURLI burchakdagi namunalarda. Shundan yuqori o'xshashlik = o'sha kadr.
+SAME_SAMPLE = 0.97
 
 
 def people():
@@ -226,6 +236,10 @@ def enroll(frame, name, branches=None):
     emb = _unit(rec.feature(rec.alignCrop(frame, face)).flatten())
 
     db = _load(FACE_DB)
+    # Bu namuna allaqachon bormi (yuz qimirlamagan)
+    for e in db.get(name, []):
+        if float(np.dot(_unit(e), emb)) >= SAME_SAMPLE:
+            return False, "Shu holat allaqachon olingan — yuzni biroz buring"
     # Bu yuz allaqachon boshqa ismga yozilganmi — ogohlantiramiz
     clash, best = None, -1.0
     for other, embs in db.items():

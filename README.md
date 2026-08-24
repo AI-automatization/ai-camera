@@ -48,13 +48,21 @@ yonib turmaydi. Birinchi ishlatishda macOS ruxsat so'raydi
 
 ## Xodim qo'shish
 
-Sahifaning tepasidagi **"Xodimlar"** tugmasi. Mac kamerasiga qarab turib
-ismni yozib "Qo'shish" bosiladi — kadrdagi eng katta yuz olinadi.
+Sahifaning tepasidagi **"Xodimlar"** tugmasi. Ism yoziladi va
+**"Yuzni olish"** bosiladi — panel jonli ko'rinish va yo'l-yo'riq chiqaradi:
+
+```
+To'g'riga qarang  →  Sekin CHAPGA  →  Sekin O'NGGA  →  YUQORIGA  →  PASTGA
+```
+
+Har bosqichda bir necha kadr olinadi (jami 13 ta). Bitta burchakdan olingan
+namuna faqat o'sha burchakni biladi — odam boshini burganda tanish
+yo'qoladi, shuning uchun turli burchak kerak.
 
 - Yuz kamida **100 piksel** bo'lishi kerak (tanish uchun 60 yetadi, lekin
-  namuna sifat talab qiladi). Kichik bo'lsa aytadi.
-- Bir odamni **turli burchak va yorug'likda bir necha marta** qo'shsa
-  tanish yaxshilanadi — har qo'shish yangi namuna bo'lib qo'shiladi.
+  namuna sifatliroq bo'lishi kerak).
+- **Bir xil holat ikki marta saqlanmaydi** — yuz qimirlamasa "yuzni biroz
+  buring" deydi. Bazani bir xil nusxalar bilan shishirmaydi.
 - Yangi yuz bazadagi boshqa odamga o'xshab qolsa ogohlantiradi.
 - **Rasm saqlanmaydi** — faqat 128 o'lchovli embedding yoziladi.
 

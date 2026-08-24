@@ -87,6 +87,19 @@ def draw(frame, state):
     return frame
 
 
+# Modellar ASOSIY IPDA, KETMA-KET yuklanadi — iplar boshlanishidan oldin.
+#
+# Ilgari ular analizator ipida yuklanardi, ayni paytda Mac kamerasi ipi
+# AVFoundation ni ishga tushirardi. Natijada MetalPerformanceShadersGraph
+# (Apple GPU) va CoreML bir vaqtda initsializatsiya qilib, xotira buzilgan
+# va Python SIGABRT bilan qulagan (crash hisoboti: malloc_zone_error ->
+# abort, com.apple.coreml.MLModelAssetResourceFactory.modelLoadQueue).
+print("Modellar yuklanmoqda…")
+pose.model()             # yolov8s-pose  (PyTorch / MPS)
+pose.detect_model()      # yolov8m       (PyTorch / MPS)
+faces.load_models()      # YuNet + SFace (OpenCV DNN / CoreML)
+print("Modellar tayyor.")
+
 nvr.build()                      # filiallarni yaratadi va ishga tushiradi
 CAMERAS = nvr.all_cameras()      # {'Filial/kanal': Camera}
 _last_analyzed = {}
@@ -98,9 +111,7 @@ def analyzer():
     Barcha filiallar bitta navbatda: GPU bitta, ikkita analizator ip ochish
     faqat bir-birini kutishga olib keladi.
     """
-    pose.model()          # oldindan yuklab qo'yamiz
-    faces._models()
-    order = list(CAMERAS)
+    order = list(CAMERAS)      # modellar allaqachon yuklangan (yuqorida)
     i = 0
     while True:
         cam = None
@@ -217,6 +228,12 @@ PAGE = """
  #people button{background:var(--line);color:var(--fg);border:0;border-radius:6px;
    padding:8px 14px;cursor:pointer;font-size:13px}
  #people button.go{background:#3d6b3d;color:#dff5df}
+ #preview{width:100%;border-radius:8px;margin-top:10px;display:none;
+   background:#000;aspect-ratio:16/9;object-fit:cover}
+ #step{margin-top:8px;font-size:15px;font-weight:600;min-height:20px}
+ #bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;
+   overflow:hidden;display:none}
+ #bar i{display:block;height:100%;width:0;background:#4ade80;transition:width .2s}
  #msg{margin-top:10px;font-size:13px;min-height:18px}
  #msg.ok{color:#9fd89f} #msg.err{color:#e08a8a}
  .plist{margin-top:16px;border-top:1px solid var(--line)}
@@ -292,8 +309,11 @@ PAGE = """
     kichik. Kameraga qarab turing va ismni yozib "Qo'shish" ni bosing.
     Bir odamni turli burchakda bir necha marta qo'shsa tanish yaxshilanadi.</div>
   <input type=text id=pname placeholder="Ism familiya" autocomplete=off>
+  <img id=preview>
+  <div id=step></div>
+  <div id=bar><i></i></div>
   <div class=row>
-    <button class=go onclick="addFace()">Qo'shish</button>
+    <button class=go id=addbtn onclick="addFace()">Yuzni olish</button>
     <button onclick="togglePeople()">Yopish</button>
   </div>
   <div id=msg></div>
@@ -422,16 +442,57 @@ function say(text, ok){
   const m=document.getElementById('msg');
   m.textContent=text; m.className = ok ? 'ok' : 'err';
 }
+// Yuz TURLI BURCHAKDAN olinadi. Bitta kadrdan olingan namuna faqat o'sha
+// burchakni biladi — odam boshini burganda tanish yo'qoladi. Shuning uchun
+// yo'l-yo'riq bilan bir necha kadr olinadi.
+const STEPS=[["To'g'riga qarang",3],["Sekin CHAPGA buring",3],
+             ["Sekin O'NGGA buring",3],["Biroz YUQORIGA",2],["Biroz PASTGA",2]];
+let previewOn=false;
+async function previewLoop(){
+  const img=document.getElementById('preview');
+  let seq=-1;
+  while(previewOn){
+    try{
+      const r=await fetch(`/frame/Mac/0?after=${seq}`);
+      if(r.status===204) continue;
+      if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
+      seq=+r.headers.get('X-Seq');
+      const u=URL.createObjectURL(await r.blob());
+      const old=img.src; img.src=u; if(old.startsWith('blob:')) URL.revokeObjectURL(old);
+    }catch(e){ await new Promise(s=>setTimeout(s,400)); }
+  }
+}
 async function addFace(){
   const name=document.getElementById('pname').value.trim();
-  if(!name){ say('Ismni yozing', false); return; }
-  say('Olinmoqda…', true);
-  const r=await fetch('/faces',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name, branch:'Mac', channel:'0', branches:null})});
-  const d=await r.json();
-  say(d.message, d.ok);
-  if(d.ok){ document.getElementById('pname').value=''; loadPeople(); }
+  if(!name){ say("Ismni yozing", false); return; }
+  const btn=document.getElementById('addbtn');
+  const img=document.getElementById('preview'), bar=document.getElementById('bar');
+  const step=document.getElementById('step'), fill=bar.querySelector('i');
+  btn.disabled=true; img.style.display='block'; bar.style.display='block';
+  previewOn=true; previewLoop();
+  say("", true);
+  const total=STEPS.reduce((a,s)=>a+s[1],0);
+  let done=0, saved=0, skipped=0, lastErr="";
+  for(const [text,shots] of STEPS){
+    step.textContent=text;
+    await new Promise(s=>setTimeout(s,1200));    // pozitsiyaga vaqt beramiz
+    for(let i=0;i<shots;i++){
+      const r=await fetch('/faces',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name, branch:'Mac', channel:'0'})});
+      const d=await r.json();
+      if(d.ok) saved++; else { skipped++; lastErr=d.message; }
+      done++; fill.style.width=(done/total*100)+'%';
+      await new Promise(s=>setTimeout(s,500));
+    }
+  }
+  previewOn=false; img.style.display='none'; bar.style.display='none';
+  step.textContent=''; fill.style.width='0';
+  btn.disabled=false;
+  if(saved) say(`${name}: ${saved} ta namuna saqlandi`+(skipped?` (${skipped} tasi o'tkazildi)`:""), true);
+  else say(lastErr || "Yuz olinmadi", false);
+  document.getElementById('pname').value=saved?"":name;
+  loadPeople();
 }
 async function delFace(name){
   if(!confirm(name+" o'chirilsinmi?")) return;
