@@ -68,6 +68,14 @@ def _load(path):
     return {}
 
 
+def _save(path, data):
+    """Atomik yozish — yozish yarmida uzilsa baza buzilmasin."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 # Baza kadrma-kadr o'qilmasin — sekin. Fayl o'zgarsa qayta o'qiladi.
 _db_cache = {"mtime": None, "known": {}}
 
@@ -174,3 +182,85 @@ if __name__ == "__main__":
     print(f"{len(people)} ta yuz topildi:")
     for p in people:
         print(f"  {p['name'] or '(tanilmadi)':<25} {p['score']}  {p['box']}")
+
+
+# ── Ro'yxatga olish ──────────────────────────────────────────────────
+MIN_ENROLL_PX = 100     # ro'yxatga olishda yuz shundan katta bo'lsin
+
+
+def people():
+    """Bazadagi xodimlar: [{name, samples, branches}]."""
+    db, meta = _load(FACE_DB), _load(META_DB)
+    return sorted(
+        ({"name": n, "samples": len(v),
+          "branches": meta.get(n, {}).get("filiallar", [])}
+         for n, v in db.items()),
+        key=lambda p: p["name"])
+
+
+def enroll(frame, name, branches=None):
+    """Kadrdagi eng katta yuzni `name` nomiga qo'shadi.
+
+    Bir odamga bir necha marta qo'shish mumkin — turli burchak va yorug'likda
+    olingan namunalar tanishni yaxshilaydi.
+
+    Qaytaradi: (ok, xabar)
+    """
+    name = (name or "").strip()
+    if not name:
+        return False, "Ism kiritilmadi"
+
+    det, rec = _models()
+    h, w = frame.shape[:2]
+    det.setInputSize((w, h))
+    _, found = det.detect(frame)
+    if found is None or len(found) == 0:
+        return False, "Kadrda yuz topilmadi"
+
+    # Eng katta yuz — ro'yxatga olayotgan odam kameraga yaqin turadi
+    face = max(found, key=lambda f: f[2] * f[3])
+    if int(face[2]) < MIN_ENROLL_PX:
+        return False, (f"Yuz juda kichik ({int(face[2])}px). "
+                       f"Kameraga yaqinroq turing (kamida {MIN_ENROLL_PX}px)")
+
+    emb = _unit(rec.feature(rec.alignCrop(frame, face)).flatten())
+
+    db = _load(FACE_DB)
+    # Bu yuz allaqachon boshqa ismga yozilganmi — ogohlantiramiz
+    clash, best = None, -1.0
+    for other, embs in db.items():
+        if other == name:
+            continue
+        s = max(float(np.dot(_unit(e), emb)) for e in embs)
+        if s > best:
+            clash, best = other, s
+
+    db.setdefault(name, []).append(emb.tolist())
+    _save(FACE_DB, db)
+
+    meta = _load(META_DB)
+    if branches:
+        entry = meta.setdefault(name, {})
+        entry["filiallar"] = sorted(set(entry.get("filiallar", [])) | set(branches))
+        _save(META_DB, meta)
+
+    _db_cache["mtime"] = None      # keshni yangilaymiz
+    msg = f"{name}: {len(db[name])}-namuna qo'shildi ({int(face[2])}px)"
+    if best >= THRESHOLD:
+        msg += f" — DIQQAT: {clash} ga ham o'xshaydi ({best:.2f})"
+    return True, msg
+
+
+def remove(name):
+    """Xodimni bazadan o'chiradi."""
+    db = _load(FACE_DB)
+    if name not in db:
+        return False, "Bunday xodim yo'q"
+    del db[name]
+    _save(FACE_DB, db)
+    meta = _load(META_DB)
+    if name in meta:
+        del meta[name]
+        _save(META_DB, meta)
+    _db_cache["mtime"] = None
+    return True, f"{name} o'chirildi"

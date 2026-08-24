@@ -193,6 +193,20 @@ def main():
     run("uzoq qutilar dublikat emas",
         _pose._inside((100, 100, 200, 400), (500, 500, 600, 800)) == 0.0)
 
+    print("\n── Xodim bazasi")
+    import faces as _f
+    n0 = len(_f.people())
+    run("baza o'qildi", n0 > 0)
+    run("har xodimda namuna bor", all(p["samples"] >= 1 for p in _f.people()))
+    ok, msg = _f.enroll(None, "")          # ism yo'q — kadrga ham tegmasligi kerak
+    run("ismsiz qo'shishni rad etadi", ok is False and "Ism" in msg)
+    ok, msg = _f.remove("__yo'q__")
+    run("yo'q xodimni o'chirishni rad etadi", ok is False)
+    run("baza o'zgarmadi", len(_f.people()) == n0)
+    # Yuz o'lchami chegaralari mantiqan to'g'rimi
+    run("ro'yxatga olish chegarasi tanishnikidan qattiq",
+        _f.MIN_ENROLL_PX > _f.MIN_RECOGNIZE_PX)
+
     print("\n── Dashboard JS sintaksisi")
     run("sahifa skripti buzilmagan", _page_js_ok())
 

@@ -22,6 +22,7 @@ import threading
 from collections import deque
 
 import cv2
+import numpy as np
 from flask import (Flask, Response, jsonify, render_template_string,
                    request, send_file)
 
@@ -203,6 +204,27 @@ PAGE = """
  #scanbtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
    border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
  #scanbtn:disabled{opacity:.5;cursor:default}
+ #peoplebtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
+   border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
+ #people{position:fixed;top:0;right:0;bottom:0;width:380px;background:var(--card);
+   border-left:1px solid var(--line);padding:16px;overflow:auto;display:none;z-index:8}
+ #people.on{display:block}
+ #people h2{font-size:15px;margin:0 0 4px}
+ #people .hint{color:var(--dim);font-size:12px;margin-bottom:12px;line-height:1.5}
+ #people input[type=text]{width:100%;background:#14110e;color:var(--fg);
+   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:14px}
+ #people .row{display:flex;gap:8px;margin-top:8px}
+ #people button{background:var(--line);color:var(--fg);border:0;border-radius:6px;
+   padding:8px 14px;cursor:pointer;font-size:13px}
+ #people button.go{background:#3d6b3d;color:#dff5df}
+ #msg{margin-top:10px;font-size:13px;min-height:18px}
+ #msg.ok{color:#9fd89f} #msg.err{color:#e08a8a}
+ .plist{margin-top:16px;border-top:1px solid var(--line)}
+ .prow{display:flex;justify-content:space-between;align-items:center;gap:8px;
+   padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+ .prow .n{flex:1} .prow .s{color:var(--dim);font-size:12px}
+ .prow button{padding:3px 9px;font-size:12px;background:transparent;
+   border:1px solid var(--line);color:var(--dim)}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
@@ -257,12 +279,26 @@ PAGE = """
   <span id=tabs></span>
   <span class=total><b id=total>0</b> odam</span>
   <button id=scanbtn onclick="doScan()">Sanash</button>
+  <button id=peoplebtn onclick="togglePeople()">Xodimlar</button>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
 <div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><b id=bigcount>0</b><span class=dim>odam</span>
   <span class=dim id=bigfps></span><span class=dim id=bigage></span>
   <button onclick="closeBig()">Yopish</button></div></div>
+<aside id=people>
+  <h2>Xodimlar</h2>
+  <div class=hint>Yuz Mac kamerasidan olinadi — NVR kameralarida yuz juda
+    kichik. Kameraga qarab turing va ismni yozib "Qo'shish" ni bosing.
+    Bir odamni turli burchakda bir necha marta qo'shsa tanish yaxshilanadi.</div>
+  <input type=text id=pname placeholder="Ism familiya" autocomplete=off>
+  <div class=row>
+    <button class=go onclick="addFace()">Qo'shish</button>
+    <button onclick="togglePeople()">Yopish</button>
+  </div>
+  <div id=msg></div>
+  <div class=plist id=plist></div>
+</aside>
 <main>
   <div class=grid id=grid></div>
   <aside>
@@ -369,6 +405,40 @@ function closeBig(){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 let lastScan=-1;
+function togglePeople(){
+  const p=document.getElementById('people');
+  p.classList.toggle('on');
+  if(p.classList.contains('on')) loadPeople();
+}
+async function loadPeople(){
+  const d=await (await fetch('/faces')).json();
+  document.getElementById('plist').innerHTML = d.people.map(p=>`
+    <div class=prow><span class=n>${p.name}</span>
+      <span class=s>${p.samples} namuna</span>
+      <button onclick="delFace('${p.name.replace(/'/g,"\\'")}')">O'chirish</button>
+    </div>`).join('') || '<div class=hint>Bazada xodim yo\'q</div>';
+}
+function say(text, ok){
+  const m=document.getElementById('msg');
+  m.textContent=text; m.className = ok ? 'ok' : 'err';
+}
+async function addFace(){
+  const name=document.getElementById('pname').value.trim();
+  if(!name){ say('Ismni yozing', false); return; }
+  say('Olinmoqda…', true);
+  const r=await fetch('/faces',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name, branch:'Mac', channel:'0', branches:null})});
+  const d=await r.json();
+  say(d.message, d.ok);
+  if(d.ok){ document.getElementById('pname').value=''; loadPeople(); }
+}
+async function delFace(name){
+  if(!confirm(name+" o'chirilsinmi?")) return;
+  const d=await (await fetch('/faces/'+encodeURIComponent(name),
+                             {method:'DELETE'})).json();
+  say(d.message, d.ok); loadPeople();
+}
 async function tick(){
   const s=await (await fetch('/state'+(branch?'?branch='+encodeURIComponent(branch):''))).json();
   branch=s.branch;
@@ -501,6 +571,46 @@ def still(branch, channel):
         return "yo'q", 404
     return Response(cam.snapshot(), mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
+
+
+# ── Xodimlarni ro'yxatga olish ───────────────────────────────────────
+@app.get("/faces")
+def faces_list():
+    return jsonify(people=faces.people(), branches=list(nvr.BRANCHES),
+                   min_px=faces.MIN_RECOGNIZE_PX,
+                   enroll_px=faces.MIN_ENROLL_PX)
+
+
+@app.post("/faces")
+def faces_add():
+    """Kameradan yuz olib, ismga yozadi.
+
+    Kadr AYNI DAMDAGI kameradan olinadi — alohida rasm saqlanmaydi.
+    Mac kamerasi tavsiya etiladi: NVR kameralarida yuz 13-41 piksel
+    bo'ladi va ro'yxatga olishga yaramaydi.
+    """
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "")
+    branch = body.get("branch") or "Mac"
+    channel = body.get("channel") or "0"
+    cam = nvr.find(branch, channel)
+    if cam is None:
+        return jsonify(ok=False, message="Kamera topilmadi"), 404
+    frame = cam.take_frame()
+    if frame is None:
+        # take_frame bir marta beradi — tahlil olib qo'ygan bo'lishi mumkin
+        data = cam.snapshot()
+        frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify(ok=False, message="Kadr olinmadi"), 503
+    ok, msg = faces.enroll(frame, name, branches=body.get("branches"))
+    return jsonify(ok=ok, message=msg)
+
+
+@app.delete("/faces/<path:name>")
+def faces_delete(name):
+    ok, msg = faces.remove(name)
+    return jsonify(ok=ok, message=msg)
 
 
 @app.get("/frame/<branch>/<channel>")

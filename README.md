@@ -44,6 +44,20 @@ MAC_CAMERA_OFF=1 ./venv/bin/python app.py
 Birinchi ishga tushirishda macOS Terminal'dan kamera ruxsatini so'raydi
 (System Settings > Privacy & Security > Camera).
 
+## Xodim qo'shish
+
+Sahifaning tepasidagi **"Xodimlar"** tugmasi. Mac kamerasiga qarab turib
+ismni yozib "Qo'shish" bosiladi — kadrdagi eng katta yuz olinadi.
+
+- Yuz kamida **100 piksel** bo'lishi kerak (tanish uchun 60 yetadi, lekin
+  namuna sifat talab qiladi). Kichik bo'lsa aytadi.
+- Bir odamni **turli burchak va yorug'likda bir necha marta** qo'shsa
+  tanish yaxshilanadi — har qo'shish yangi namuna bo'lib qo'shiladi.
+- Yangi yuz bazadagi boshqa odamga o'xshab qolsa ogohlantiradi.
+- **Rasm saqlanmaydi** — faqat 128 o'lchovli embedding yoziladi.
+
+Baza: `data/faces.json`, filiallar `data/meta.json`.
+
 ## Qismlari
 
 | Fayl | Vazifasi |
