@@ -119,9 +119,35 @@ Faqat YANGI kadrlar hisoblanadi.
 | keyframe so'ralmasa | 0.70 sek | 1.1 |
 | keyframe so'ralsa | **0.01 sek** | **3.7-5.1** |
 
-Uchdan-uchgacha (brauzergacha): Chilonzor 5.14 kadr/sek, Yunusobod 3.58 —
-ikkalasida ham kechikish 0.03 sekunddan kam. Kechikish kadrdagi soat yozuvi
-orqali o'lchandi (NVR soati bizniki bilan 0.5 sek ichida mos).
+Uchdan-uchgacha (brauzergacha), ochilgan kamera:
+
+| | Kadr/sek | Uzilish >0.5s |
+|---|---|---|
+| Yunusobod B3 | 7.6 | 0–1 |
+| Yunusobod B2 | 7.8 | 0 |
+| Chilonzor Co-Working | 6.2 | 0 |
+
+Kechikish 0.03 sekunddan kam. Kadrdagi soat yozuvi orqali o'lchandi
+(NVR soati bizniki bilan 0.5 sek ichida mos).
+
+**Qotishning sabablari** (ikkalasi ham bizning kodda edi, o'lchab topildi):
+har kamerada o'z fon ipi bo'lib, 15 tasi bir vaqtda uyg'onardi va ochilgan
+kamerani to'sardi; analizator esa ochilgan kameraning ustida sekundiga bir
+marta ~190 ms ishlardi. Endi fon kameralarini bitta skaner navbat bilan
+aylanadi va kamera ochilganda butunlay to'xtaydi.
+
+## Rasm sifati
+
+Kadr NVR dan qanday kelsa **shundayligicha** ko'rsatiladi — dekod ham,
+qayta kodlash ham qilinmaydi. Ramkalar rasmga chizilmaydi, ular rasm
+ustidagi HTML elementlar (`/state` ularni foizda beradi).
+
+Ilgari kadr dekod qilinib, ramkalar chizilib, JPEG sifat 85 bilan qayta
+kodlanardi — bu ikkinchi marta siqish edi. Endi rasm yo'qotishsiz va
+kichikroq (Yunusobod: 127 KB qayta kodlangan → 71 KB asl).
+
+Snapshot 1920x1080 da cheklangan (kameraning o'zi 2560x1440 bo'lsa ham),
+Yunusobod kameralarining ko'pi esa 1280x720. Bu NVR chegarasi.
 
 ## Bazadagi muammolar (kamera aybi emas)
 

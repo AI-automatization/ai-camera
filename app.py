@@ -85,7 +85,7 @@ def draw(frame, state):
     return frame
 
 
-nvr.build(on_frame=draw)         # filiallarni yaratadi va ishga tushiradi
+nvr.build()                      # filiallarni yaratadi va ishga tushiradi
 CAMERAS = nvr.all_cameras()      # {'Filial/kanal': Camera}
 _last_analyzed = {}
 
@@ -137,9 +137,24 @@ def analyzer():
                                 camera_name=cam.name, faces=found, persons=persons)
         events = detectors.run(ctx)
 
+        h, w = frame.shape[:2]
+        # Ramkalar FOIZDA saqlanadi: brauzer rasmni istalgan o'lchamda
+        # ko'rsatadi, foiz esa o'lchamga bog'liq emas.
+        boxes = [{"x": round(100 * f["box"][0] / w, 2),
+                  "y": round(100 * f["box"][1] / h, 2),
+                  "w": round(100 * f["box"][2] / w, 2),
+                  "h": round(100 * f["box"][3] / h, 2),
+                  "label": f["name"] or "?", "kind": "face" if f["name"] else "unknown"}
+                 for f in found]
+        boxes += [{"x": round(100 * p["box"][0] / w, 2),
+                   "y": round(100 * p["box"][1] / h, 2),
+                   "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
+                   "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
+                   "label": "bosh pastda", "kind": "alert"}
+                  for p in persons if p["reliable"] and p["head_down"]]
         cam.apply({"faces": found, "persons": persons, "events": events,
                    "zone": ctx.zone, "count": ctx.head_count,
-                   "named": ctx.named,
+                   "named": ctx.named, "boxes": boxes,
                    "identity": ctx.identity_reliable,
                    "face_px": max((f["box"][2] for f in found), default=0)})
 
@@ -147,6 +162,8 @@ def analyzer():
             ev["camera"] = cam.name
             ev["channel"] = cam.channel
             ev["branch"] = branch
+            # Hodisa rasmi — dalil, shuning uchun ramkalar unga CHIZILADI
+            # (jonli ko'rinishdan farqli: u yerda brauzer chizadi).
             vis = draw(frame.copy(), {"faces": found, "persons": persons,
                                       "events": [ev]})
             ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 82])
@@ -197,7 +214,15 @@ PAGE = """
  #big{position:fixed;inset:0;background:#000e;display:none;z-index:9;
    align-items:center;justify-content:center;flex-direction:column;gap:10px}
  #big.on{display:flex}
- #big img{max-width:94vw;max-height:82vh;border-radius:8px;background:#000}
+ #bigwrap{position:relative;display:inline-block;line-height:0}
+ #big img{max-width:94vw;max-height:82vh;border-radius:8px;background:#000;
+   image-rendering:auto}
+ .ov{position:absolute;border:2px solid;border-radius:3px;pointer-events:none}
+ .ov span{position:absolute;top:-19px;left:-2px;font-size:11px;line-height:1.4;
+   padding:0 5px;border-radius:3px;white-space:nowrap;color:#111;font-weight:600}
+ .ov.face{border-color:#4ade80} .ov.face span{background:#4ade80}
+ .ov.unknown{border-color:#fb923c} .ov.unknown span{background:#fb923c}
+ .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
  #bigbar{color:var(--fg);display:flex;gap:18px;align-items:center;font-size:14px}
  #bigbar button{background:var(--card);color:var(--fg);border:1px solid var(--line);
    border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
@@ -218,7 +243,7 @@ PAGE = """
   <span class=total><b id=total>0</b> odam</span>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
-<div id=big><img id=bigimg><div id=bigbar>
+<div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><span class=dim id=bigfps></span>
   <button onclick="closeBig()">Yopish</button></div></div>
 <main>
@@ -261,6 +286,23 @@ function build(cams){
   built=true;
 }
 let bigCh=null;
+// Ramkalar rasmga CHIZILMAYDI — ular rasm ustidagi HTML elementlar.
+// Sabab: chizish uchun kadrni dekod qilib, qayta kodlash kerak edi va bu
+// rasmni ikkinchi marta siqib xiralashtirardi. Endi kadr kameradan
+// qanday kelsa shundayligicha ko'rsatiladi.
+function drawBoxes(boxes){
+  const wrap=document.getElementById('bigwrap'), img=document.getElementById('bigimg');
+  for(const el of [...wrap.querySelectorAll('.ov')]) el.remove();
+  if(!img.clientWidth) return;
+  for(const b of boxes){
+    const d=document.createElement('div');
+    d.className='ov '+b.kind;
+    d.style.left=b.x+'%'; d.style.top=b.y+'%';
+    d.style.width=b.w+'%'; d.style.height=b.h+'%';
+    d.innerHTML='<span>'+b.label+'</span>';
+    wrap.appendChild(d);
+  }
+}
 function openBig(ch,name){
   bigCh=ch;
   document.getElementById('bigimg').src=
@@ -269,7 +311,7 @@ function openBig(ch,name){
   document.getElementById('big').classList.add('on');
 }
 function closeBig(){
-  bigCh=null;
+  bigCh=null; drawBoxes([]);
   document.getElementById('bigimg').src='';   // oqimni uzamiz, fokus bo'shaydi
   document.getElementById('big').classList.remove('on');
 }
@@ -305,8 +347,10 @@ async function tick(){
     if(bigCh===null)
       document.getElementById('s'+c.channel).src=
         '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
-    if(c.channel===bigCh)
+    if(c.channel===bigCh){
       document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
+      drawBoxes(c.boxes||[]);
+    }
   }
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
@@ -344,6 +388,7 @@ def state():
             "zone": detectors.ZONES.get(name, {}).get(cam.channel),
             "count": st.get("count", 0), "named": st.get("named", []),
             "identity": st.get("identity", False),
+            "boxes": st.get("boxes", []),
             "fps": round(cam.fps, 1),
             "face_px": st.get("face_px", 0),
             "hit": cam.channel in hits,

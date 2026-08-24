@@ -106,10 +106,9 @@ OFFLINE_JPEG = placeholder("Ulanmadi")
 class Branch:
     """Bitta filialning NVR si: kameralari, budjeti, qulfi."""
 
-    def __init__(self, name, host, cameras, on_frame=None):
+    def __init__(self, name, host, cameras):
         self.name = name
         self.host = host
-        self.on_frame = on_frame
         self.gate = threading.Semaphore(MAX_CONN)
         self.locked_until = 0.0
         self._lock_checked = 0.0
@@ -287,6 +286,10 @@ class Camera:
         self.branch = branch
         self.channel = channel
         self.name = name or channel
+        # NVR bergan JPEG AYNAN o'zi saqlanadi. Ilgari kadr dekod qilinib,
+        # ramkalar chizilib, qayta kodlanardi — bu ikkinchi marta siqish edi
+        # va rasm xiralashardi. Endi ramkalarni brauzer chizadi, rasm esa
+        # kameradan qanday chiqqan bo'lsa shundayligicha ko'rsatiladi.
         self.jpeg = None
         self.seq = 0
         self.online = False
@@ -338,25 +341,18 @@ class Camera:
                 return self.SAME       # bundan yangirog'i allaqachon chiqqan
             self._last_digest = digest
             self._published_at = started
-        frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
-            return self.FAIL
+        # Dekod QILINMAYDI. Tahlil kerak bo'lganda analizator o'zi dekod
+        # qiladi (sekundiga bir marta), ko'rsatish uchun esa dekod ham,
+        # qayta kodlash ham shart emas.
         with self._raw_lock:
-            self._raw = frame
-        self._publish(frame)
+            self._raw = data
+        self._publish(data)
         return self.NEW
 
-    def _publish(self, frame):
-        with self.lock:
-            state = dict(self.state)
-        draw = self.branch.on_frame
-        vis = draw(frame.copy(), state) if draw else frame
-        ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ok:
-            return
+    def _publish(self, data):
         now = time.time()
         with self.lock:
-            self.jpeg = buf.tobytes()
+            self.jpeg = data
             self.seq += 1
             self._stamps.append(now)
             if len(self._stamps) > 1:
@@ -364,10 +360,16 @@ class Camera:
                 self.fps = (len(self._stamps) - 1) / span if span > 0 else 0.0
 
     def take_frame(self):
-        """Tahlil uchun xom kadr. Bir marta beradi — takror tahlil qilinmasin."""
+        """Tahlil uchun kadr (dekod qilingan). Bir marta beradi.
+
+        Dekod shu yerda bo'ladi — ko'rsatish yo'lida emas. Analizator
+        sekundiga bir marta chaqiradi, ko'rsatish esa 7 marta.
+        """
         with self._raw_lock:
-            frame, self._raw = self._raw, None
-        return frame
+            data, self._raw = self._raw, None
+        if data is None:
+            return None
+        return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 
     def apply(self, state):
         with self.lock:
@@ -384,11 +386,10 @@ class Camera:
 BRANCHES = {}
 
 
-def build(on_frame=None):
+def build():
     """ENABLED dagi filiallarni yaratadi va ishga tushiradi."""
     for name in ENABLED:
-        BRANCHES[name] = Branch(name, BRANCH_HOSTS[name],
-                                BRANCH_CAMERAS[name], on_frame=on_frame)
+        BRANCHES[name] = Branch(name, BRANCH_HOSTS[name], BRANCH_CAMERAS[name])
     for br in BRANCHES.values():
         br.start()
     return BRANCHES
