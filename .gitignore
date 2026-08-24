@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+
+# Modellar (og'ir, qayta yuklab olinadi)
+*.pt
+*.task
+*.onnx
+
+# Sinov kadrlari
+*.jpg
+*.png
