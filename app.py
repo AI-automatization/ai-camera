@@ -296,7 +296,7 @@ async function tick(){
       document.getElementById('s'+c.channel).src=
         '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh)
-      document.getElementById('bigfps').textContent=c.fps+' kadr/sek';
+      document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
   }
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>

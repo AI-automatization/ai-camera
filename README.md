@@ -103,6 +103,25 @@ bo'lmasa ehtiyotkor qiymat olingan va `detectors.py` da izohlangan.
 - **NVR qulflanadi.** Hikvision ko'p parallel digest so'rovni hujum deb biladi
   va akkauntni ~26 daqiqaga bloklaydi. Kod buni sezadi va qulf ochilishini
   kutadi, lekin qo'lda ko'p so'rov yubormaslik kerak.
+- **Yangi kadr sekundiga ~4 ta.** Bu NVR snapshot yo'lining chegarasi, kod
+  aybi emas: kamera GovLength=20 va 20 kadr/sek bilan ishlaydi, ya'ni yangi
+  I-frame sekundiga bir marta. `requestKeyFrame` uni majburlab ~4 ga
+  chiqaradi. Undan yuqorisi uchun kamerada GovLength ni kamaytirish kerak —
+  bu yozuv sifati va disk sarfiga tegadi, Bekzod orqali.
+
+## Tezlik va kechikish (o'lchangan)
+
+So'rov soni aldamchi ko'rsatkich: NVR bir xil rasmni qayta-qayta beradi.
+Faqat YANGI kadrlar hisoblanadi.
+
+| | Kechikish | Yangi kadr/sek |
+|---|---|---|
+| keyframe so'ralmasa | 0.70 sek | 1.1 |
+| keyframe so'ralsa | **0.01 sek** | **3.7-5.1** |
+
+Uchdan-uchgacha (brauzergacha): Chilonzor 5.14 kadr/sek, Yunusobod 3.58 —
+ikkalasida ham kechikish 0.03 sekunddan kam. Kechikish kadrdagi soat yozuvi
+orqali o'lchandi (NVR soati bizniki bilan 0.5 sek ichida mos).
 
 ## Bazadagi muammolar (kamera aybi emas)
 

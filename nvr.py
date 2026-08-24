@@ -12,13 +12,25 @@ Ikki jonli o'lchov shu kodni belgilagan:
      har bir urinish qulfni YANA uzaytiradi, shuning uchun qulf sezilganda
      butunlay to'xtaymiz va muddatni NVR ning o'zidan so'raymiz.
 
-  2) Tezlik budjeti (Yunusobod, 2026-08-24, kanal 1601):
-         1 oqim   7.1 kadr/sek       3 oqim  16.9  <- to'yinish
-         2 oqim  12.4                4 oqim  16.5  (foyda yo'q)
-     Ya'ni NVR ~17 kadr/sek beradi, lekin BITTA ulanish 7.1 dan oshmaydi.
-     Shuning uchun ochilgan kamera parallel oqimlar bilan tortiladi.
-     requestKeyFrame ATAYLAB ishlatilmaydi: u tezlikni 7.1 -> 6.1 ga
-     tushiradi (har kadrga qo'shimcha PUT), kechikish esa baribir kichik.
+  2) So'rov soni ALDAMCHI o'lchov. NVR sekundiga 17 ta javob berishi mumkin,
+     lekin javoblarning ko'pi AYNAN BIR XIL rasm bo'ladi — snapshot oxirgi
+     I-frame dan olinadi, kamera esa GovLength=20 va 20 kadr/sek bilan
+     ishlaydi, ya'ni yangi I-frame sekundiga bir marta.
+
+     O'lchandi (Chilonzor, kanal 1201, 2026-08-24) — YANGI kadrlar bo'yicha:
+         keyframe yo'q, 1 oqim               1.10 yangi kadr/sek
+         keyframe har so'rovda, 1 oqim       2.88
+         keyframe har so'rovda, 2 oqim       2.25   (bir-birini to'sadi)
+         alohida keyframe ipi + 2 oqim       3.75   <- eng yaxshisi
+         alohida keyframe ipi + 3 oqim       3.62
+     Sub-oqim (1202) yordam bermaydi: GovLength=50, atigi 1.12 yangi kadr/sek.
+
+     Shuning uchun: ochilgan kamerada ALOHIDA ip requestKeyFrame yuboradi va
+     IKKI ip kadr oladi. Bir xil kadr qayta e'lon qilinmaydi (dublikatlar
+     "silliq video" illyuziyasini berardi, aslida rasm 1 sekund eski edi).
+
+     Haqiqiy yechim kamera sozlamasida: GovLength ni kamaytirish. Lekin bu
+     yozuv sifati va disk sarfiga ta'sir qiladi — Bekzod orqali hal qilinadi.
 """
 import os
 import re
@@ -27,6 +39,7 @@ import threading
 from collections import deque
 
 import cv2
+import hashlib
 import numpy as np
 import requests
 from requests.auth import HTTPDigestAuth
@@ -64,7 +77,8 @@ ENABLED = [b.strip() for b in
            if b.strip() in BRANCH_HOSTS]
 
 MAX_CONN = 6              # bitta NVR ga bir vaqtda shuncha so'rov
-FOCUS_WORKERS = 3         # ochilgan kamerani shuncha oqim bilan tortamiz
+FOCUS_WORKERS = 2         # ochilgan kamerani shuncha oqim bilan tortamiz
+                          # (3 tasi yomonroq: 3.62 < 3.75 yangi kadr/sek)
 # Odam sanash — asosiy funksiya, shuning uchun fon kameralari kamera ochilganda
 # ham SEKINLASHMAYDI. 15 kamera 10 sekundda = 1.5 so'rov/sek, budjet ~17.
 BG_INTERVAL = 10.0
@@ -162,6 +176,32 @@ class Branch:
             cam.start()
         for _ in range(FOCUS_WORKERS):
             threading.Thread(target=self._focus_worker, daemon=True).start()
+        threading.Thread(target=self._keyframe_worker, daemon=True).start()
+
+    def _keyframe_worker(self):
+        """Ochilgan kameradan uzluksiz yangi I-frame so'raydi.
+
+        Busiz snapshot oxirgi I-frame ni qaytaradi va rasm ~1 sekund eski
+        bo'ladi: so'rov 4/sek bo'lsa ham YANGI kadr 1.1/sek edi. Bu aynan
+        ko'zga tashlanadigan kechikish.
+
+        Nega alohida ip: kadr oluvchi ipning o'zi PUT qilsa, PUT va GET
+        navbatlashib bir-birini kutadi (2.88 -> 2.25 yangi kadr/sek).
+        """
+        sess = requests.Session()
+        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        while True:
+            ch = self.focused_channel()
+            if not ch or time.time() < self.locked_until or self.reachable is False:
+                time.sleep(0.25)
+                continue
+            url = (f"http://{self.host}/ISAPI/Streaming/channels/{ch}"
+                   f"/requestKeyFrame")
+            try:
+                with self.gate:
+                    sess.put(url, timeout=6)
+            except Exception:
+                time.sleep(0.2)
 
     # ── fokus ────────────────────────────────────────────────────────
     def set_focus(self, channel):
@@ -185,8 +225,11 @@ class Branch:
             if cam is None:
                 time.sleep(0.25)
                 continue
-            if not cam.fetch_once(sess):
-                time.sleep(0.1)
+            result = cam.fetch_once(sess)
+            if result == Camera.FAIL:
+                time.sleep(0.2)
+            elif result == Camera.SAME:
+                time.sleep(0.05)   # yangi I-frame hali tayyor emas
 
     # ── so'rov ───────────────────────────────────────────────────────
     def get(self, sess, url):
@@ -226,6 +269,8 @@ class Camera:
         self._raw = None
         self._raw_lock = threading.Lock()
         self._stamps = deque(maxlen=20)
+        self._last_digest = None    # bir xil kadrni ikki marta e'lon qilmaymiz
+        self._published_at = 0.0    # eski kadr yangisining ustiga chiqmasin
         self.running = True
 
     @property
@@ -241,19 +286,41 @@ class Camera:
     def start(self):
         threading.Thread(target=self._grab, daemon=True).start()
 
+    # fetch_once natijasi. "same" ni "fail" dan ajratish SHART: dublikat
+    # kelishi kamera ishlayotganini bildiradi, uni offline deb belgilash xato.
+    NEW, SAME, FAIL = "new", "same", "fail"
+
     def fetch_once(self, sess):
-        """Bitta kadr olib e'lon qiladi. True — muvaffaqiyat."""
+        """Bitta kadr oladi. NEW / SAME / FAIL qaytaradi.
+
+        Ikki filtr:
+          * Dublikat — NVR ko'pincha aynan o'sha rasmni qaytaradi. Uni qayta
+            dekod qilib, chizib, kodlash bekor mehnat va tezlik ko'rsatkichini
+            aldaydi (11 kadr/sek ko'rinardi, aslida 1.1 tasi yangi edi).
+          * Tartib — ikki ip parallel so'raydi, sekinroq javob keyinroq
+            keladi. Eski kadrni yangisining ustiga qo'ysak video orqaga
+            sakraydi. Shuning uchun so'rov BOSHLANGAN vaqt solishtiriladi.
+        """
+        started = time.time()
         data = self.branch.get(sess, self.url)
         if data is None:
-            return False
+            return self.FAIL
+        self.online = True             # javob keldi — kamera ishlayapti
+        digest = hashlib.md5(data).digest()
+        with self.lock:
+            if digest == self._last_digest:
+                return self.SAME       # o'sha rasm — dekod ham qilmaymiz
+            if started < self._published_at:
+                return self.SAME       # bundan yangirog'i allaqachon chiqqan
+            self._last_digest = digest
+            self._published_at = started
         frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
-            return False
-        self.online = True
+            return self.FAIL
         with self._raw_lock:
             self._raw = frame
         self._publish(frame)
-        return True
+        return self.NEW
 
     def _grab(self):
         """Fon oquvchi: kamera ochilmagan bo'lsa ham odam sanashga kadr beradi."""
@@ -263,7 +330,7 @@ class Camera:
             if self.branch.focused_channel() == self.channel:
                 time.sleep(0.5)      # bu kamerani hovuz tortyapti
                 continue
-            if not self.fetch_once(sess):
+            if self.fetch_once(sess) == self.FAIL:
                 self.online = False
             time.sleep(BG_INTERVAL)
 
