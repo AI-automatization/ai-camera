@@ -34,7 +34,8 @@ import detectors
 
 PORT = 5001
 MAX_EVENTS = 60
-ANALYZE_INTERVAL = 1.0      # fon kamerasi (sanash uchun yetadi)
+ANALYZE_INTERVAL = 5.0      # fon kamerasi: grid muzlatilgan, sanoq "Sanash"
+                            # tugmasi bilan yangilanadi — tez-tez tahlil shart emas
 # Ochilgan kamera TEZ-TEZ tahlil qilinadi — ramkalar odam bilan birga
 # yurishi kerak. Yuruvchi odamda 3 sekundlik oraliqda ramka orqada qolardi.
 #
@@ -114,24 +115,54 @@ def analyzer():
     order = list(CAMERAS)      # modellar allaqachon yuklangan (yuqorida)
     i = 0
     while True:
-        cam = None
-        for br in nvr.BRANCHES.values():        # ochilgan kamera navbatsiz
+        # Ochilgan kamera MUTLAQ ustunlikda. Uning kadri hali kelmagan
+        # bo'lsa ham fon kamerasiga O'TMAYMIZ — biroz kutamiz. Aks holda
+        # 170 ms lik fon tahlillari orasida ochilgan kamera sekundlab
+        # navbat kutardi (o'lchandi: ramka yoshi 3.3 sekundgacha).
+        watched_cam = None
+        for br in nvr.BRANCHES.values():
             ch = br.focused_channel()
-            if ch and br.cameras[ch]._raw is not None:
-                cam = br.cameras[ch]
+            if ch:
+                watched_cam = br.cameras[ch]
                 break
-        if cam is None:
-            cam = CAMERAS[order[i % len(order)]]
-            i += 1
 
-        watched = cam.branch.focused_channel() == cam.channel
-        wait = FOCUS_ANALYZE_INTERVAL if watched else ANALYZE_INTERVAL
-        if time.time() - _last_analyzed.get(cam.key, 0) < wait:
-            time.sleep(0.05)
-            continue
+        cam = None
+        if watched_cam is not None:
+            since = time.time() - _last_analyzed.get(watched_cam.key, 0)
+            if since >= FOCUS_ANALYZE_INTERVAL:
+                if watched_cam._raw is not None:
+                    cam = watched_cam
+                else:
+                    time.sleep(0.03)     # kadri kelishini kutamiz, fonni emas
+                    continue
+
+        if cam is None:
+            # Fon kamerasi — lekin keyingi fokus tahliligacha ULGURSAKKINA.
+            # Fon tahlili ~170 ms; fokusga 0.2 sekunddan kam qolgan bo'lsa
+            # boshlamaymiz, aks holda fokus kechikadi.
+            if watched_cam is not None:
+                left = FOCUS_ANALYZE_INTERVAL - (
+                    time.time() - _last_analyzed.get(watched_cam.key, 0))
+                if left < 0.25:
+                    time.sleep(max(0.0, left))
+                    continue
+            for _ in range(len(order)):
+                cand = CAMERAS[order[i % len(order)]]
+                i += 1
+                if cand is watched_cam:
+                    continue
+                if time.time() - _last_analyzed.get(cand.key, 0) < ANALYZE_INTERVAL:
+                    continue
+                if cand._raw is None:
+                    continue
+                cam = cand
+                break
+            if cam is None:
+                time.sleep(0.05)
+                continue
+
         frame = cam.take_frame()
         if frame is None:
-            time.sleep(0.02)
             continue
         _last_analyzed[cam.key] = time.time()
 
