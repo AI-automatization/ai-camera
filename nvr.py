@@ -76,9 +76,19 @@ ENABLED = [b.strip() for b in
            os.environ.get("BRANCHES", "Yunusobod,Chilonzor").split(",")
            if b.strip() in BRANCH_HOSTS]
 
-MAX_CONN = 6              # bitta NVR ga bir vaqtda shuncha so'rov
-FOCUS_WORKERS = 2         # ochilgan kamerani shuncha oqim bilan tortamiz
-                          # (3 tasi yomonroq: 3.62 < 3.75 yangi kadr/sek)
+# NVR ba'zan javob bermay qoladi: 60 sekundlik o'lchovda 2.24, 2.07 va 1.05
+# sekundlik so'rovlar uchradi. Ikkita oquvchi ip bo'lsa, ikkalasi ham shunday
+# so'rovga tiqilib qolsa ekran muzlaydi — Sardor ko'rgan qotish shundan edi.
+#
+# Yechim: ko'proq ip va QISQA kutish. Tiqilgan so'rov 2 sekunddan keyin
+# tashlanadi va qaytadan urinadi, ip esa 10 sekund band bo'lib turmaydi.
+# O'lchandi (A4, 40 sekunddan):
+#     2 oqim, kutish 10s   6.53 kadr/sek  eng yomon uzilish 0.74s
+#     4 oqim, kutish  3s   7.24           2.16s
+#     6 oqim, kutish  2s   8.45           0.60s   <- eng yaxshisi
+MAX_CONN = 10             # bitta NVR ga bir vaqtda shuncha so'rov
+FOCUS_WORKERS = 6         # ochilgan kamerani shuncha oqim bilan tortamiz
+FETCH_TIMEOUT = 2.0       # kadr so'rovi shuncha kutadi, keyin qaytadan
 # Grid kameralari MUZLATILGAN: doimiy so'rov yubormaydi, oxirgi kadr turadi.
 # Sardorning talabi — 15 kamera birdaniga ishlashi kerak emas, kamera faqat
 # bosib kirilganda ishlasin. Bu qotishning ham sababi edi: 15 kamera bir
@@ -236,7 +246,7 @@ class Branch:
                    f"/requestKeyFrame")
             try:
                 with self.gate:
-                    sess.put(url, timeout=6)
+                    sess.put(url, timeout=FETCH_TIMEOUT)
             except Exception:
                 time.sleep(0.2)
 
@@ -275,9 +285,9 @@ class Branch:
             return None
         with self.gate:
             try:
-                r = sess.get(url, timeout=10)
+                r = sess.get(url, timeout=FETCH_TIMEOUT)
             except Exception:
-                return None
+                return None      # tiqilib qoldi — qaytadan urinamiz
         if r.status_code == 401:
             self.note_lockout()
             return None

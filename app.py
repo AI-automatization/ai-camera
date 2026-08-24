@@ -157,7 +157,8 @@ def analyzer():
                    "h": round(100 * f["box"][3] / h, 2),
                    "label": f["name"], "kind": "face"}
                   for f in found if f["name"]]
-        cam.apply({"faces": found, "persons": persons, "events": events,
+        cam.apply({"at": time.time(),
+                   "faces": found, "persons": persons, "events": events,
                    "zone": ctx.zone, "count": ctx.head_count,
                    "named": ctx.named, "boxes": boxes,
                    "identity": ctx.identity_reliable,
@@ -255,7 +256,7 @@ PAGE = """
 </header>
 <div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><b id=bigcount>0</b><span class=dim>odam</span>
-  <span class=dim id=bigfps></span>
+  <span class=dim id=bigfps></span><span class=dim id=bigage></span>
   <button onclick="closeBig()">Yopish</button></div></div>
 <main>
   <div class=grid id=grid></div>
@@ -306,6 +307,10 @@ async function doScan(){
 // Sabab: chizish uchun kadrni dekod qilib, qayta kodlash kerak edi va bu
 // rasmni ikkinchi marta siqib xiralashtirardi. Endi kadr kameradan
 // qanday kelsa shundayligicha ko'rsatiladi.
+// Ramkalar tahlil paytidagi holatni ko'rsatadi, rasm esa jonli. Odam
+// yurayotgan bo'lsa eski ramka noto'g'ri joyda turadi (eskalatorda aynan
+// shunday bo'ldi). Shuning uchun eskirgan ramka umuman chizilmaydi.
+const BOX_MAX_AGE = 2.0;
 function drawBoxes(boxes){
   const wrap=document.getElementById('bigwrap'), img=document.getElementById('bigimg');
   for(const el of [...wrap.querySelectorAll('.ov')]) el.remove();
@@ -321,8 +326,12 @@ function drawBoxes(boxes){
 }
 function openBig(ch,name){
   bigCh=ch; bigName=name;
-  document.getElementById('bigimg').src=
-    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1';
+  const img=document.getElementById('bigimg');
+  // Oqim uzilsa <img> qora qolib ketardi, ramkalar esa ustida turaverardi.
+  // Endi uzilganda qayta ulanadi va ramkalar tozalanadi.
+  img.onerror=()=>{ drawBoxes([]);
+    if(bigCh===ch) setTimeout(()=>{ if(bigCh===ch) openBig(ch,name); }, 1000); };
+  img.src='/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1&t='+Date.now();
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
@@ -373,7 +382,10 @@ async function tick(){
     if(c.channel===bigCh){
       document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
       document.getElementById('bigcount').textContent=c.count;
-      drawBoxes(c.boxes||[]);
+      const fresh = c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
+      drawBoxes(fresh ? (c.boxes||[]) : []);
+      document.getElementById('bigage').textContent =
+        c.boxes_age==null ? '' : (fresh ? '' : `ramkalar ${c.boxes_age}s eski`);
     }
   }
   lastScan = s.scanned_ago;
@@ -414,6 +426,7 @@ def state():
             "count": st.get("count", 0), "named": st.get("named", []),
             "identity": st.get("identity", False),
             "boxes": st.get("boxes", []),
+            "boxes_age": round(time.time() - st["at"], 1) if st.get("at") else None,
             "fps": round(cam.fps, 1),
             "face_px": st.get("face_px", 0),
             "hit": cam.channel in hits,
