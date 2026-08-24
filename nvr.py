@@ -10,14 +10,17 @@ Ikki jonli o'lchov shu kodni belgilagan (2026-08-04):
      shunday bo'ldi: lockStatus=lock, unlockTime=934). Shuning uchun bitta
      sessiya, ulanish limiti va 401 kelganda to'xtash.
 
-  2) Tezlik budjeti. Snapshot rejimida NVR jami ~9 rasm/sek beradi, RTSP (554)
-     yopiq. Shuning uchun budjet taqsimlanadi: ochilgan kamera tez, fondagilar
-     sekin — aks holda hammasi qotib ko'rinadi.
+  2) Tezlik budjeti. RTSP (554) yopiq, faqat snapshot bor. NVR ~17 kadr/sek
+     beradi, lekin BITTA oqim 7 kadrdan oshmaydi — shuning uchun ochilgan
+     kamera parallel oqimlar bilan tortiladi, fondagilar esa sekin. Aks holda
+     15 kamera budjetni bo'lib olib, hammasi qotib ko'rinadi.
 """
 import os
 import re
 import time
 import threading
+
+from collections import deque
 
 import cv2
 import numpy as np
@@ -57,16 +60,28 @@ USER = os.environ.get("NVR_USER", "operator")
 PASSWORD = os.environ.get("NVR_PASS", "0perator1audit")
 CAMERAS = BRANCHES[BRANCH]["cameras"]
 
-MAX_CONN = 4              # NVR ga bir vaqtda shuncha so'rovdan ko'p bo'lmasin
-FOCUS_INTERVAL = 0.05     # ochilgan kamera — imkon qadar tez
-BG_INTERVAL = 2.0         # hech kim qaramayotganda
-BG_SLOW_INTERVAL = 8.0    # kimdir kamera ochib turganda fondagilar
+# ── Tezlik budjeti ───────────────────────────────────────────────────
+# Jonli o'lchandi (Yunusobod, 2026-08-24, kanal 1601):
+#     1 oqim          7.1 kadr/sek
+#     2 oqim          12.4
+#     3 oqim          16.9   <- to'yinish nuqtasi
+#     4 oqim          16.5   (foyda yo'q, faqat ulanish sarflaydi)
+# Ya'ni NVR ~17 kadr/sek beradi. Eskirgan izohdagi "~9 kadr/sek" xato edi.
+#
+# Ochilgan kameraga PARALLEL oqim beriladi — bitta oqim 7 kadrdan oshmaydi,
+# uchtasi esa 17 gacha chiqadi. Fondagilar sekin so'raladi: ular faqat odam
+# sanash uchun kerak, sekundiga bir marta yangilanishi shart emas.
+MAX_CONN = 6              # NVR ga bir vaqtda shuncha so'rov (3 fokus + fon)
+FOCUS_WORKERS = 3         # ochilgan kamerani shuncha oqim bilan tortamiz
+BG_INTERVAL = 12.0        # hech kim qaramayotganda (odam sanash uchun yetadi)
+BG_SLOW_INTERVAL = 25.0   # kimdir kamera ochganda fondagilar chekinadi
 FOCUS_TTL = 6.0           # brauzer jim qolsa fokus bekor bo'ladi
 
 _gate = threading.Semaphore(MAX_CONN)
 _locked_until = [0.0]
 
 FOCUS = {"channel": None, "until": 0.0}
+REGISTRY = {}             # kanal -> Camera (fokus hovuzi shundan topadi)
 
 
 def focus(channel):
@@ -149,11 +164,19 @@ class Camera:
         self.seq = 0
         self.online = False
         self.state = {}              # tahlil natijasi (detektorlar to'ldiradi)
+        self.fps = 0.0
         self.lock = threading.Lock()
         self._raw = None
         self._raw_lock = threading.Lock()
+        self._stamps = deque(maxlen=20)   # oxirgi kadr vaqtlari (fps uchun)
         self.running = True
+        # Har bir kamerada BITTA fon oquvchi. Ochilgan kameraga qo'shimcha
+        # tezlikni umumiy hovuz beradi (_focus_pool) — har kameraga o'z
+        # oquvchilarini berish 15x3=45 ta ip hosil qilardi va ularning 42 tasi
+        # bekorga uyg'onib, GIL ni band qilardi (o'lchandi: 15 kadr ishlab
+        # chiqarilib, brauzerga 9 tasi yetardi).
         threading.Thread(target=self._grab, daemon=True).start()
+        REGISTRY[channel] = self
 
     @property
     def url(self):
@@ -164,40 +187,55 @@ class Camera:
     def keyframe_url(self):
         return f"http://{HOST}/ISAPI/Streaming/channels/{self.channel}/requestKeyFrame"
 
+    def fetch_once(self, sess):
+        """Bitta kadr olib, e'lon qiladi. True — muvaffaqiyat."""
+        data = get(sess, self.url)
+        if data is None:
+            return False
+        frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return False
+        self.online = True
+        with self._raw_lock:
+            self._raw = frame
+        self._publish(frame)
+        return True
+
     def _grab(self):
+        """Fon oquvchi: kamera ochilmagan bo'lsa ham odam sanashga kadr beradi.
+
+        requestKeyFrame ATAYLAB olib tashlandi: o'lchovda u tezlikni
+        7.1 -> 6.1 kadr/sek ga tushirdi (har kadrga qo'shimcha PUT so'rovi).
+        Uzluksiz tortganda kechikish baribir kichik — keyingi kadr ~0.15
+        sekunddan keyin keladi.
+        """
         sess = requests.Session()
         sess.auth = HTTPDigestAuth(USER, PASSWORD)
         while self.running:
             active = focused_channel()
-            is_focused = active == self.channel
-            # Snapshot faqat I-frame da olinadi (GOP tufayli har ~2 sekundda).
-            # requestKeyFrame uni darhol yaratishga majburlaydi -> real-time
-            # bo'ladi (o'lchandi: 2s -> ~0s). Faqat ochilgan kamerada — fonda
-            # 2 sekund muhim emas, NVR ni bekorga yuklamaymiz.
-            if is_focused:
-                request_keyframe(sess, self.keyframe_url)
-            data = get(sess, self.url)
-            if data is None:
+            if active == self.channel:
+                # Ochilgan kamerani hovuz tortyapti — bu ip aralashmasin
+                time.sleep(0.5)
+                continue
+            if not self.fetch_once(sess):
                 self.online = False
-            else:
-                frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    self.online = True
-                    with self._raw_lock:
-                        self._raw = frame
-                    self._publish(frame)
-            time.sleep(FOCUS_INTERVAL if is_focused
-                       else (BG_SLOW_INTERVAL if active else BG_INTERVAL))
+            time.sleep(BG_SLOW_INTERVAL if active else BG_INTERVAL)
 
     def _publish(self, frame):
         with self.lock:
             state = dict(self.state)
         vis = self.on_frame(frame.copy(), state) if self.on_frame else frame
-        ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        if ok:
-            with self.lock:
-                self.jpeg = buf.tobytes()
-                self.seq += 1
+        ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            return
+        now = time.time()
+        with self.lock:
+            self.jpeg = buf.tobytes()
+            self.seq += 1
+            self._stamps.append(now)
+            if len(self._stamps) > 1:
+                span = self._stamps[-1] - self._stamps[0]
+                self.fps = (len(self._stamps) - 1) / span if span > 0 else 0.0
 
     def take_frame(self):
         """Tahlil uchun xom kadr. Bir marta beradi — takror tahlil qilinmasin."""
@@ -212,3 +250,27 @@ class Camera:
     def snapshot(self):
         with self.lock:
             return self.jpeg or PLACEHOLDER
+
+
+# ── Fokus hovuzi ─────────────────────────────────────────────────────
+# Ochilgan kamerani tortadigan umumiy oqimlar. Ular qaysi kamera ochilganini
+# har safar tekshiradi, shuning uchun kamera almashsa ham qo'shimcha ip
+# yaratilmaydi. Nima uchun umumiy: har kameraga o'z oqimlarini bersak
+# 15x3=45 ip bo'lardi va bo'sh turgan 42 tasi GIL ni band qilib, yetkazish
+# tezligini 15 dan 9 kadr/sekka tushirardi.
+def _focus_pool_worker():
+    sess = requests.Session()
+    sess.auth = HTTPDigestAuth(USER, PASSWORD)
+    while True:
+        ch = focused_channel()
+        cam = REGISTRY.get(ch) if ch else None
+        if cam is None:
+            time.sleep(0.25)
+            continue
+        if not cam.fetch_once(sess):
+            time.sleep(0.1)
+
+
+def start_focus_pool(workers=FOCUS_WORKERS):
+    for _ in range(workers):
+        threading.Thread(target=_focus_pool_worker, daemon=True).start()

@@ -22,7 +22,8 @@ import threading
 from collections import deque
 
 import cv2
-from flask import Flask, Response, jsonify, render_template_string, send_file
+from flask import (Flask, Response, jsonify, render_template_string,
+                   request, send_file)
 
 import nvr
 import rules
@@ -80,6 +81,7 @@ def draw(frame, state):
 
 
 CAMERAS = {ch: nvr.Camera(ch, on_frame=draw) for ch in nvr.CAMERAS}
+nvr.start_focus_pool()
 _last_analyzed = {}
 
 
@@ -159,6 +161,14 @@ PAGE = """
    font-size:11px;color:var(--dim)}
  .idok{color:#9fd89f} .idno{color:#c99}
  .cam.hit{outline:2px solid #d9534f}
+ .cam img{cursor:pointer}
+ #big{position:fixed;inset:0;background:#000c;display:none;z-index:9;
+   align-items:center;justify-content:center;flex-direction:column;gap:10px}
+ #big.on{display:flex}
+ #big img{max-width:94vw;max-height:82vh;border-radius:8px}
+ #bigbar{color:var(--fg);display:flex;gap:18px;align-items:center;font-size:14px}
+ #bigbar button{background:var(--card);color:var(--fg);border:1px solid var(--line);
+   border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
  aside{background:var(--card);border:1px solid var(--line);border-radius:8px;
    padding:12px;max-height:calc(100vh - 120px);overflow:auto}
  .ev{border-bottom:1px solid var(--line);padding:10px 0}
@@ -174,6 +184,9 @@ PAGE = """
   <h1>MARS audit kamerasi</h1>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
+<div id=big><img id=bigimg><div id=bigbar>
+  <span id=bigname></span><span class=dim id=bigfps></span>
+  <button onclick="closeBig()">Yopish</button></div></div>
 <main>
   <div class=grid id=grid></div>
   <aside>
@@ -193,11 +206,24 @@ function build(cams){
       <span class=zone>${c.zone||''}</span></div>
       <div class=meta2><span>${c.count} odam</span>
       <span class="${c.identity?'idok':'idno'}">${c.identity?"yuz aniq":"yuz kichik"}</span></div>`;
-    d.querySelector('img').onclick=()=>fetch('/focus/'+c.channel,{method:'POST'});
+    d.querySelector('img').onclick=()=>openBig(c.channel,c.name);
     grid.appendChild(d);
   }
   built=true;
 }
+let bigCh=null;
+function openBig(ch,name){
+  bigCh=ch;
+  document.getElementById('bigimg').src='/stream/'+ch+'?big=1';
+  document.getElementById('bigname').textContent=name;
+  document.getElementById('big').classList.add('on');
+}
+function closeBig(){
+  bigCh=null;
+  document.getElementById('bigimg').src='';   // oqimni uzamiz, fokus bo'shaydi
+  document.getElementById('big').classList.remove('on');
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 async function tick(){
   const s=await (await fetch('/state')).json();
   if(!built) build(s.cameras);
@@ -207,6 +233,8 @@ async function tick(){
   for(const c of s.cameras){
     const el=document.getElementById('c'+c.channel);
     if(el) el.classList.toggle('hit', c.hit);
+    if(c.channel===bigCh)
+      document.getElementById('bigfps').textContent=c.fps+' kadr/sek';
   }
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
@@ -241,6 +269,7 @@ def state():
             "zone": detectors.ZONES.get(nvr.BRANCH, {}).get(ch),
             "count": st.get("count", 0), "named": st.get("named", []),
             "identity": st.get("identity", False),
+            "fps": round(cam.fps, 1),
             "face_px": st.get("face_px", 0),
             "hit": ch in hits,
         })
@@ -261,16 +290,23 @@ def stream(channel):
     cam = CAMERAS.get(channel)
     if cam is None:
         return "yo'q", 404
+    big = request.args.get("big") == "1"
 
     def gen():
         last = -1
         while True:
+            # Kimdir katta ko'rinishda qarab turibdi — fokusni ushlab turamiz.
+            # Ilgari fokus faqat bosilganda yoqilardi va TTL 6 sekundda
+            # so'nardi, ya'ni amalda hech qachon ishlamasdi: 15 kamera
+            # birdek sekin so'ralib, hammasi 0.7 kadr/sek edi.
+            if big:
+                nvr.focus(channel)
             if cam.seq != last:
                 last = cam.seq
                 yield (b"--f\r\nContent-Type: image/jpeg\r\n\r\n"
                        + cam.snapshot() + b"\r\n")
             else:
-                time.sleep(0.05)
+                time.sleep(0.02)
 
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=f")
 
