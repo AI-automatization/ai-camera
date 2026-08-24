@@ -229,7 +229,7 @@ PAGE = """
    padding:8px 14px;cursor:pointer;font-size:13px}
  #people button.go{background:#3d6b3d;color:#dff5df}
  #preview{width:100%;border-radius:8px;margin-top:10px;display:none;
-   background:#000;aspect-ratio:16/9;object-fit:cover}
+   background:#000;aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1)}
  #step{margin-top:8px;font-size:15px;font-weight:600;min-height:20px}
  #bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;
    overflow:hidden;display:none}
@@ -309,7 +309,7 @@ PAGE = """
     kichik. Kameraga qarab turing va ismni yozib "Qo'shish" ni bosing.
     Bir odamni turli burchakda bir necha marta qo'shsa tanish yaxshilanadi.</div>
   <input type=text id=pname placeholder="Ism familiya" autocomplete=off>
-  <img id=preview>
+  <video id=preview autoplay muted playsinline></video>
   <div id=step></div>
   <div id=bar><i></i></div>
   <div class=row>
@@ -426,9 +426,10 @@ function closeBig(){
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 let lastScan=-1;
 function togglePeople(){
-  const p=document.getElementById('people');
-  p.classList.toggle('on');
-  if(p.classList.contains('on')) loadPeople();
+  const p=document.getElementById("people");
+  p.classList.toggle("on");
+  if(p.classList.contains("on")) loadPeople();
+  else closeCam();          // panel yopilsa kamera ham o'chsin
 }
 async function loadPeople(){
   const d=await (await fetch('/faces')).json();
@@ -443,55 +444,70 @@ function say(text, ok){
   m.textContent=text; m.className = ok ? 'ok' : 'err';
 }
 // Yuz TURLI BURCHAKDAN olinadi. Bitta kadrdan olingan namuna faqat o'sha
-// burchakni biladi — odam boshini burganda tanish yo'qoladi. Shuning uchun
-// yo'l-yo'riq bilan bir necha kadr olinadi.
+// burchakni biladi — odam boshini burganda tanish yo'qoladi.
+//
+// Kamera BRAUZERDA ochiladi (getUserMedia), serverdagi kamera emas: server
+// ko'rinishi tarmoq orqali kechikadi va odam ko'rgan kadri bilan saqlangan
+// kadr mos kelmaydi. Bu yerda ikkalasi ham bitta <video> dan.
 const STEPS=[["To'g'riga qarang",3],["Sekin CHAPGA buring",3],
              ["Sekin O'NGGA buring",3],["Biroz YUQORIGA",2],["Biroz PASTGA",2]];
-let previewOn=false;
-async function previewLoop(){
-  const img=document.getElementById('preview');
-  let seq=-1;
-  while(previewOn){
-    try{
-      const r=await fetch(`/frame/Mac/0?after=${seq}`);
-      if(r.status===204) continue;
-      if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
-      seq=+r.headers.get('X-Seq');
-      const u=URL.createObjectURL(await r.blob());
-      const old=img.src; img.src=u; if(old.startsWith('blob:')) URL.revokeObjectURL(old);
-    }catch(e){ await new Promise(s=>setTimeout(s,400)); }
-  }
+let camStream=null;
+async function openCam(){
+  if(!camStream)
+    camStream=await navigator.mediaDevices.getUserMedia(
+      {video:{width:{ideal:1280},height:{ideal:960}}});
+  return camStream;
+}
+function closeCam(){
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+}
+function grab(video){
+  const c=document.createElement("canvas");
+  c.width=video.videoWidth; c.height=video.videoHeight;
+  c.getContext("2d").drawImage(video,0,0);
+  return new Promise(r=>c.toBlob(r,"image/jpeg",0.92));
 }
 async function addFace(){
-  const name=document.getElementById('pname').value.trim();
+  const name=document.getElementById("pname").value.trim();
   if(!name){ say("Ismni yozing", false); return; }
-  const btn=document.getElementById('addbtn');
-  const img=document.getElementById('preview'), bar=document.getElementById('bar');
-  const step=document.getElementById('step'), fill=bar.querySelector('i');
-  btn.disabled=true; img.style.display='block'; bar.style.display='block';
-  previewOn=true; previewLoop();
-  say("", true);
+  const btn=document.getElementById("addbtn");
+  const vid=document.getElementById("preview"), bar=document.getElementById("bar");
+  const step=document.getElementById("step"), fill=bar.querySelector("i");
+  btn.disabled=true; say("", true);
+  try{
+    vid.srcObject=await openCam();
+    vid.style.display="block"; bar.style.display="block";
+    await new Promise(r=>{ if(vid.videoWidth) r(); else vid.onloadedmetadata=r; });
+  }catch(e){
+    btn.disabled=false;
+    say("Kameraga ruxsat berilmadi: "+e.message, false);
+    return;
+  }
   const total=STEPS.reduce((a,s)=>a+s[1],0);
   let done=0, saved=0, skipped=0, lastErr="";
   for(const [text,shots] of STEPS){
     step.textContent=text;
-    await new Promise(s=>setTimeout(s,1200));    // pozitsiyaga vaqt beramiz
+    await new Promise(s=>setTimeout(s,1300));   // pozitsiyaga vaqt
     for(let i=0;i<shots;i++){
-      const r=await fetch('/faces',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name, branch:'Mac', channel:'0'})});
-      const d=await r.json();
-      if(d.ok) saved++; else { skipped++; lastErr=d.message; }
-      done++; fill.style.width=(done/total*100)+'%';
-      await new Promise(s=>setTimeout(s,500));
+      const blob=await grab(vid);
+      const fd=new FormData();
+      fd.append("name",name); fd.append("image",blob,"f.jpg");
+      try{
+        const d=await (await fetch("/faces/image",{method:"POST",body:fd})).json();
+        if(d.ok) saved++; else { skipped++; lastErr=d.message; }
+      }catch(e){ skipped++; lastErr=e.message; }
+      done++; fill.style.width=(done/total*100)+"%";
+      step.textContent=text+"  ("+saved+" ta olindi)";
+      await new Promise(s=>setTimeout(s,420));
     }
   }
-  previewOn=false; img.style.display='none'; bar.style.display='none';
-  step.textContent=''; fill.style.width='0';
-  btn.disabled=false;
-  if(saved) say(`${name}: ${saved} ta namuna saqlandi`+(skipped?` (${skipped} tasi o'tkazildi)`:""), true);
+  closeCam();
+  vid.srcObject=null; vid.style.display="none"; bar.style.display="none";
+  step.textContent=""; fill.style.width="0"; btn.disabled=false;
+  if(saved) say(name+": "+saved+" ta namuna saqlandi"
+                +(skipped?" ("+skipped+" tasi o'tkazildi)":""), true);
   else say(lastErr || "Yuz olinmadi", false);
-  document.getElementById('pname').value=saved?"":name;
+  document.getElementById("pname").value = saved ? "" : name;
   loadPeople();
 }
 async function delFace(name){
@@ -674,6 +690,29 @@ def faces_add():
     if frame is None:
         return jsonify(ok=False, message="Kadr olinmadi"), 503
     ok, msg = faces.enroll(frame, name, branches=body.get("branches"))
+    return jsonify(ok=ok, message=msg)
+
+
+@app.post("/faces/image")
+def faces_add_image():
+    """Brauzer yuborgan rasmdan yuz oladi.
+
+    Kamera BRAUZERDA ochiladi (getUserMedia) — 5002 dagidek. Sabab:
+    serverdagi kamera ko'rinishi tarmoq orqali kechikadi va odam ko'rgan
+    kadri bilan saqlangan kadr bir xil bo'lmaydi. Brauzerda esa ko'rinish
+    ham, olingan kadr ham aynan bitta manbadan.
+    """
+    name = request.form.get("name", "").strip()
+    photo = request.files.get("image")
+    if not photo:
+        return jsonify(ok=False, message="Rasm kelmadi"), 400
+    raw = np.frombuffer(photo.read(), np.uint8)
+    frame = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify(ok=False, message="Rasm o'qilmadi"), 400
+    branches = request.form.get("branches")
+    ok, msg = faces.enroll(frame, name,
+                           branches=branches.split(",") if branches else None)
     return jsonify(ok=ok, message=msg)
 
 

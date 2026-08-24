@@ -49,7 +49,8 @@ yonib turmaydi. Birinchi ishlatishda macOS ruxsat so'raydi
 ## Xodim qo'shish
 
 Sahifaning tepasidagi **"Xodimlar"** tugmasi. Ism yoziladi va
-**"Yuzni olish"** bosiladi — panel jonli ko'rinish va yo'l-yo'riq chiqaradi:
+**"Yuzni olish"** bosiladi. Kamera **brauzerda** ochiladi (birinchi marta
+ruxsat so'raydi) va panel jonli ko'rinish bilan yo'l-yo'riq chiqaradi:
 
 ```
 To'g'riga qarang  →  Sekin CHAPGA  →  Sekin O'NGGA  →  YUQORIGA  →  PASTGA
