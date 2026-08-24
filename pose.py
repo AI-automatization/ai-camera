@@ -21,6 +21,15 @@ import numpy as np
 from ultralytics import YOLO
 
 MODEL = "yolov8s-pose.pt"
+# Pose modeli bo'g'imlarga tayanadi va shu sababli ORQASI bilan o'tirgan,
+# bo'g'imi ko'rinmaydigan odamni o'tkazib yuboradi (o'lchandi: B2 da
+# sochi bilan yuzi to'silgan odam topilmadi). Oddiy odam-aniqlash modeli
+# esa tana shakliga qaraydi va uni topadi.
+#
+# Shuning uchun IKKALASI ishlatiladi: pose bo'g'imni ko'rganini topadi,
+# detektor qolganini. Natijada B2 da 12 -> 13 (haqiqiy son).
+DETECT_MODEL = "yolov8m.pt"
+DETECT_CONF = 0.35      # pastroqda soxta topilma ko'payadi (0.25 da 16 ta chiqdi)
 IMGSZ = 960
 # Quti ishonchi ALDAMCHI — odam sanashda unga tayanib bo'lmaydi.
 # O'lchandi (B1, deraza oldida o'tirgan odam): quti ishonchi 0.05, ya'ni
@@ -38,20 +47,29 @@ KP_CONF = 0.30          # nuqta ishonchi shundan past bo'lsa hisobga olinmaydi
 # qolgan edi).
 #   SANASH  — bu odammi? (yumshoqroq: stolga yashiringan odam ham odam)
 #   HOLAT   — o'tirganmi / boshi pastdami? (qattiq: nuqtalar aniq bo'lsin)
-# Sanash mezoni IKKI BOSQICHLI. Yagona "8 ta nuqta" sharti yarim to'silgan
-# odamni tashlab yuborardi: B4 da stolga engashgan odamning yelkasi 0.97,
-# quti bali 0.74 edi — lekin oyoqlari stol ostida qolgani uchun atigi 7 ta
-# nuqtasi ko'rinardi.
+# Sanash mezoni — DALILLAR YIG'INDISI.
 #
-# Yelka ishonchi eng kuchli dalil, shuning uchun u yuqori bo'lsa kamroq
-# nuqta yetadi:
-COUNT_SHOULDER_STRONG = 0.90   # yelka shundan yuqori bo'lsa
-COUNT_KP_IF_STRONG = 6         # shuncha nuqta yetadi
-COUNT_SHOULDER_MIN = 0.85      # yelka bundan past bo'lsa umuman sanalmaydi
-COUNT_KP_MIN = 9               # oraliqdagi yelkada esa ko'proq nuqta kerak
-POSTURE_SHOULDER_MIN = 0.80  # holat o'qish uchun
+# Ilgari yelka ishonchi qat'iy darvoza edi va shu sababli aniq odamlar
+# tushib qolardi. Jonli o'lchandi (B2, 2026-08-24): 13 ta ishonchli tana
+# nuqtasi va yuz nuqtasi bor topilma yelkasi 0.82 bo'lgani uchun rad
+# etilgan; yana biri 12 nuqta bilan 0.75 da rad etilgan. Ikkalasi ham
+# haqiqiy odam edi.
+#
+# Xulosa: NUQTA SONI yelka balidan kuchliroq dalil. Odam turgan burchagiga
+# qarab yelkasi to'silishi mumkin, lekin o'nta nuqta tasodifan chiqmaydi.
+# Shuning uchun uchta yo'ldan biri yetadi:
+COUNT_KP_ALONE = 10         # shuncha nuqta bo'lsa yelka umuman so'ralmaydi
+COUNT_SHOULDER_MID = 0.85   # o'rtacha yelka +
+COUNT_KP_MID = 7            #   shuncha nuqta
+COUNT_SHOULDER_HIGH = 0.93  # juda ishonchli yelka +
+COUNT_KP_HIGH = 5           #   kamroq nuqta yetadi
+
+# Holat o'qish (o'tirganmi / boshi pastdami) uchun esa chegara QATTIQ qoladi:
+# noto'g'ri sanash bitta raqamni buzadi, noto'g'ri "uxlayapti" degani esa
+# odamga jarima yozadi.
+POSTURE_SHOULDER_MIN = 0.80
 POSTURE_KP_MIN = 6
-PERSON_MIN_H = 45       # bundan kichik odamda nuqtalar ishonchsiz
+PERSON_MIN_H = 35       # bundan kichik odamda nuqtalar ishonchsiz
 
 # Dublikat qutilar. YOLO bitta odamga ikkita quti berishi mumkin (o'lchandi:
 # A2 da bir kishida ikkita, Coworking da chap burchakda beshta ustma-ust).
@@ -93,7 +111,23 @@ SLUMPED_HEAD_MIN = 0.55   # bosh y = quti tepasidan shu ulushdan past
 SLEEP_HOLD_SEC = 60.0
 
 _model = None
+_detect = None
 _lock = threading.Lock()
+
+
+def detect_model():
+    """Odam-aniqlash modeli (bo'g'imsiz). Pose topolmaganini topadi."""
+    global _detect
+    with _lock:
+        if _detect is None:
+            import torch
+            from ultralytics import YOLO as _Y
+            dev = "mps" if torch.backends.mps.is_available() else "cpu"
+            m = _Y(DETECT_MODEL)
+            m.to(dev)
+            m(np.zeros((IMGSZ, IMGSZ, 3), dtype=np.uint8), device=dev, verbose=False)
+            _detect = (m, dev)
+        return _detect
 
 
 def model():
@@ -212,11 +246,9 @@ def people(res):
         # mumkin, yolg'iz nuqta soni esa soyada.
         if h < PERSON_MIN_H:
             continue
-        if shoulder < COUNT_SHOULDER_MIN:
-            continue
-        need = (COUNT_KP_IF_STRONG if shoulder >= COUNT_SHOULDER_STRONG
-                else COUNT_KP_MIN)
-        if strong < need:
+        if not (strong >= COUNT_KP_ALONE
+                or (shoulder >= COUNT_SHOULDER_MID and strong >= COUNT_KP_MID)
+                or (shoulder >= COUNT_SHOULDER_HIGH and strong >= COUNT_KP_HIGH)):
             continue
 
         # Kadr chetida kesilgan odamning qutisi haqiqiy tana chegarasi emas —
@@ -313,3 +345,37 @@ if __name__ == "__main__":
             continue
         print(f"  {i}. bo'y={p['height']}px  o'tirgan={p['seated']}  "
               f"bosh_pastda={p['head_down']}")
+
+
+# ── Ikki modelni birlashtirish ───────────────────────────────────────
+MERGE_IOU = 0.30        # detektor qutisi pose odamiga shuncha tegsa — o'sha odam
+MERGE_INSIDE = 0.50
+
+
+def people_in(frame):
+    """Kadrdagi odamlar — pose va odam-detektori birgalikda.
+
+    Avval pose (u bo'g'imlarni ham beradi, holat shundan o'qiladi), keyin
+    detektor topgan va pose o'tkazib yuborgan odamlar qo'shiladi. Bunday
+    odamning holati o'qilmaydi (bo'g'imi yo'q), lekin SANALADI.
+    """
+    found = people(infer(frame))
+    m, dev = detect_model()
+    res = m(frame, conf=DETECT_CONF, imgsz=IMGSZ, classes=[0],
+            device=dev, verbose=False)[0]
+    for box in res.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        b = (x1, y1, x2, y2)
+        if (y2 - y1) < PERSON_MIN_H:
+            continue
+        if any(_iou(b, p["box"]) >= MERGE_IOU or _inside(b, p["box"]) >= MERGE_INSIDE
+               for p in found):
+            continue
+        found.append({
+            "box": b, "height": y2 - y1, "conf": float(box.conf[0]),
+            "keypoints": None, "strong": 0, "neck": None,
+            "reliable": False,        # bo'g'im yo'q — holat o'qilmaydi
+            "seated": None, "head_down": None,
+            "source": "detector",
+        })
+    return found

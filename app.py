@@ -124,7 +124,7 @@ def analyzer():
 
         branch = cam.branch.name
         try:
-            persons = pose.people(pose.infer(frame))
+            persons = pose.people_in(frame)
             # Yuz qidirish eng qimmat qadam (138 ms). Xonada odam bo'lmasa
             # qidirishning ma'nosi yo'q — bo'sh xonalarda bekorga sarflanardi.
             found = (faces.identify(frame, branch=branch)
