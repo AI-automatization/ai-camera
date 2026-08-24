@@ -29,11 +29,16 @@ def person(seated=False, head_down=False, reliable=True):
 
 
 def _page_js_ok():
-    """app.py ichidagi sahifa skripti sintaksis jihatdan to'g'rimi.
+    """Brauzerga KETAYOTGAN sahifa skripti ishga tushadimi.
 
-    O'zbekcha apostrof ("yuz o'qildi") JS satrini uzib, butun dashboardni
-    bo'sh qoldirgan edi — sahifa 200 qaytarardi, lekin hech narsa
-    ko'rinmasdi. Shuning uchun bu endi sinovda.
+    Ikki marta shu yerda tutilmagan xato o'tib ketdi, chunki sinov app.py
+    MATNIDAN skript ajratardi — Python qatorining o'zidan, ya'ni Python
+    escape'lari yechilmagan holidan. Brauzerga esa YECHILGAN qiymat boradi
+    va farq aynan apostrofda chiqadi: "yo'q" satrni uzib yuboradi.
+    Shuning uchun endi app.PAGE QIYMATI tekshiriladi.
+
+    Bundan tashqari sintaksis yetarli emas: skript ishga tushganda ham
+    yiqilishi mumkin. Shuning uchun u soxta DOM'da HAQIQATAN bajariladi.
     """
     import re
     import shutil
@@ -44,15 +49,19 @@ def _page_js_ok():
     if node is None:
         print("       (node yo'q — o'tkazib yuborildi)")
         return True
-    src = open("app.py").read()
-    html = src.split('PAGE = """')[1].split('"""')[0]
-    js = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    import app as _app
+    m = re.search(r"<script>(.*?)</script>", _app.PAGE, re.S)
+    if not m:
+        print("       skript topilmadi")
+        return False
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
-        f.write(js)
+        f.write(m.group(1))
         path = f.name
-    r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+    r = subprocess.run([node, "tools_domcheck.js", path],
+                       capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
     if r.returncode:
-        print("      ", r.stderr.strip().split("\n")[0])
+        print("      ", out.split("\n")[0])
     return r.returncode == 0
 
 
@@ -207,8 +216,8 @@ def main():
     run("ro'yxatga olish chegarasi tanishnikidan qattiq",
         _f.MIN_ENROLL_PX > _f.MIN_RECOGNIZE_PX)
 
-    print("\n── Dashboard JS sintaksisi")
-    run("sahifa skripti buzilmagan", _page_js_ok())
+    print("\n── Dashboard skripti")
+    run("brauzerdagi skript ishga tushadi", _page_js_ok())
 
     print(f"\n{'='*46}\n{passed} ta o'tdi, {failed} ta yiqildi")
     return 1 if failed else 0

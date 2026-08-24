@@ -416,7 +416,7 @@ async function loadPeople(){
     <div class=prow><span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
       <button onclick="delFace('${p.name.replace(/'/g,"\\'")}')">O'chirish</button>
-    </div>`).join('') || '<div class=hint>Bazada xodim yo\'q</div>';
+    </div>`).join('') || "<div class=hint>Bazada xodim yo'q</div>";
 }
 function say(text, ok){
   const m=document.getElementById('msg');
@@ -569,6 +569,8 @@ def still(branch, channel):
     cam = nvr.find(branch, channel)
     if cam is None:
         return "yo'q", 404
+    if hasattr(cam.branch, "want"):
+        cam.branch.want()      # Mac kamerasi: so'ralganda yoqiladi
     return Response(cam.snapshot(), mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
 
@@ -596,6 +598,13 @@ def faces_add():
     cam = nvr.find(branch, channel)
     if cam is None:
         return jsonify(ok=False, message="Kamera topilmadi"), 404
+    if hasattr(cam.branch, "want"):
+        cam.branch.want()
+        # Kamera endi yoqilgan bo'lishi mumkin — birinchi kadrni kutamiz
+        for _ in range(30):
+            if cam.jpeg is not None:
+                break
+            time.sleep(0.1)
     frame = cam.take_frame()
     if frame is None:
         # take_frame bir marta beradi — tahlil olib qo'ygan bo'lishi mumkin
@@ -629,6 +638,8 @@ def frame(branch, channel):
     if cam is None:
         return "yo'q", 404
     after = request.args.get("after", type=int, default=-1)
+    if hasattr(cam.branch, "want"):
+        cam.branch.want()
     if request.args.get("big") == "1":
         cam.branch.set_focus(channel)
     WAIT = 3.0

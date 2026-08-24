@@ -481,16 +481,41 @@ class LocalCamera:
         threading.Thread(target=self._grab, daemon=True).start()
 
     def _grab(self):
-        cap = cv2.VideoCapture(LOCAL_INDEX)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, LOCAL_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LOCAL_HEIGHT)
-        if not cap.isOpened():
-            print(f"[{self.branch.name}] kamera ochilmadi — Terminal'ga "
-                  f"kamera ruxsati kerak (System Settings > Privacy > Camera)")
-            self.branch.reachable = False
-            return
-        self.branch.reachable = True
+        """Kamera FAQAT kerak bo'lganda ochiladi.
+
+        Ilgari u ishga tushishda ochilib, doim yoqilib turardi — Mac'da
+        kamera chirog'i o'chmasdi. Endi kamera bu filial ochilganda (yoki
+        xodim qo'shilayotganda) yoqiladi va IDLE_OFF sekunddan keyin
+        o'chadi: kamera yoqiq turishi foydalanuvchiga ko'rinadi va uni
+        bekorga yoqib qo'yish to'g'ri emas.
+        """
+        cap = None
         while self.running:
+            if not self.wanted():
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                    self.online = False
+                    print(f"[{self.branch.name}] kamera o'chirildi")
+                time.sleep(0.3)
+                continue
+
+            if cap is None:
+                cap = cv2.VideoCapture(LOCAL_INDEX)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, LOCAL_WIDTH)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LOCAL_HEIGHT)
+                if not cap.isOpened():
+                    print(f"[{self.branch.name}] kamera ochilmadi — Terminal'ga "
+                          f"kamera ruxsati kerak "
+                          f"(System Settings > Privacy & Security > Camera)")
+                    self.branch.reachable = False
+                    cap.release()
+                    cap = None
+                    time.sleep(3)
+                    continue
+                self.branch.reachable = True
+                print(f"[{self.branch.name}] kamera yoqildi")
+
             ok, frame = cap.read()
             if not ok:
                 self.online = False
@@ -513,7 +538,8 @@ class LocalCamera:
                     self.fps = (len(self._stamps) - 1) / span if span > 0 else 0.0
             # 30 kadr/sek kerak emas — protsessorni bo'shatamiz
             time.sleep(0.05)
-        cap.release()
+        if cap is not None:
+            cap.release()
 
     def take_frame(self):
         with self._raw_lock:
@@ -528,8 +554,12 @@ class LocalCamera:
         with self.lock:
             return self.jpeg or PLACEHOLDER
 
+    def wanted(self):
+        """Kamera hozir kerakmi — filial ochilgan yoki yaqinda so'ralgan."""
+        return time.time() < self.branch.wanted_until
+
     def fetch_once(self, sess=None):
-        return self.SAME       # o'zi uzluksiz oladi, skaner tegmasin
+        return self.SAME       # o'zi oladi, skaner tegmasin
 
 
 class LocalBranch:
@@ -537,6 +567,7 @@ class LocalBranch:
 
     local = True         # kompyuterdagi kamera: budjet cheklovi yo'q,
                          # shuning uchun grid'da ham jonli ko'rsatiladi
+    IDLE_OFF = 8.0       # so'ralmasa shuncha sekunddan keyin o'chadi
 
     def __init__(self, name="Mac"):
         self.name = name
@@ -547,23 +578,23 @@ class LocalBranch:
         self.scanned_at = 0.0
         self.stream_token = 0
         self.focus = {"channel": None, "until": 0.0}
+        self.wanted_until = 0.0
         self.cameras = {"0": LocalCamera(self)}
 
+    def want(self):
+        """Kamera kerak — yoqib turamiz (IDLE_OFF sekundga)."""
+        self.wanted_until = time.time() + self.IDLE_OFF
+
     def start(self):
-        # Kamera ochilguncha kutamiz — aks holda ishga tushish xabarida
-        # "ULANMADI" deb noto'g'ri yoziladi.
         for cam in self.cameras.values():
             cam.start()
-        for _ in range(20):
-            if self.reachable is not None:
-                break
-            time.sleep(0.1)
 
     def lock_state(self):
         return (False, 0)
 
     def set_focus(self, channel):
         self.focus.update(channel=channel, until=time.time() + FOCUS_TTL)
+        self.want()
 
     def focused_channel(self):
         return self.focus["channel"] if time.time() < self.focus["until"] else None
@@ -573,4 +604,5 @@ class LocalBranch:
         return self.stream_token
 
     def request_scan(self):
-        self.scanned_at = time.time()      # kamera uzluksiz ishlaydi
+        self.want()
+        self.scanned_at = time.time()

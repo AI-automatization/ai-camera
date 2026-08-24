@@ -41,7 +41,9 @@ bo'lmasa o'chirish:
 MAC_CAMERA_OFF=1 ./venv/bin/python app.py
 ```
 
-Birinchi ishga tushirishda macOS Terminal'dan kamera ruxsatini so'raydi
+Kamera FAQAT kerak bo'lganda yoqiladi — Mac filiali ochilganda yoki xodim
+qo'shilayotganda — va 8 sekund tinch tursa o'chadi. Kamera chirog'i bekorga
+yonib turmaydi. Birinchi ishlatishda macOS ruxsat so'raydi
 (System Settings > Privacy & Security > Camera).
 
 ## Xodim qo'shish
