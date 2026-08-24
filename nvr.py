@@ -125,6 +125,11 @@ class Branch:
         self._lock_checked = 0.0
         self.reachable = None          # None = hali tekshirilmagan
         self.focus = {"channel": None, "until": 0.0}
+        # Har bir oqim so'roviga navbat raqami beriladi. Faqat ENG OXIRGI
+        # so'rov fokusni ushlaydi. Aks holda kamera almashtirilganda eski
+        # oqim ham fokusni tortib turadi va ikkisi navbatlashib, ekran
+        # qorayib qoladi (logda ko'rindi: 801 va 1601 ketma-ket).
+        self.stream_token = 0
         self._scan_wanted = threading.Event()
         self.scanning = False
         self.scanned_at = 0.0
@@ -253,6 +258,11 @@ class Branch:
     # ── fokus ────────────────────────────────────────────────────────
     def set_focus(self, channel):
         self.focus.update(channel=channel, until=time.time() + FOCUS_TTL)
+
+    def new_stream_token(self):
+        """Yangi oqim so'rovi uchun navbat raqami."""
+        self.stream_token += 1
+        return self.stream_token
 
     def focused_channel(self):
         return self.focus["channel"] if time.time() < self.focus["until"] else None

@@ -33,12 +33,13 @@ import detectors
 
 PORT = 5001
 MAX_EVENTS = 60
-ANALYZE_INTERVAL = 1.0      # bitta kamerani shu tezlikdan tez tahlil qilmaymiz
-# Ochilgan kamera SEKINROQ tahlil qilinadi. Tahlil ~190 ms band qiladi
-# (pose 49 + yuz 138) va shu vaqtda video qotib turadi. Odam qarab turganda
-# silliqlik muhimroq: detektorlar baribir 20-30 sekundlik oynada ishlaydi,
-# 3 sekundda bir marta tahlil ularga yetadi.
-FOCUS_ANALYZE_INTERVAL = 3.0
+ANALYZE_INTERVAL = 1.0      # fon kamerasi (sanash uchun yetadi)
+# Ochilgan kamera TEZ-TEZ tahlil qilinadi — ramkalar odam bilan birga
+# yurishi kerak. Yuruvchi odamda 3 sekundlik oraliqda ramka orqada qolardi.
+#
+# Narx o'lchandi: pose + odam-detektori birga 117 ms. Ya'ni 0.5 sekundda
+# bir marta ~23% yuk — kadr yetkazishga sezilarli ta'sir qilmaydi.
+FOCUS_ANALYZE_INTERVAL = 0.5
 
 app = Flask(__name__)
 
@@ -297,7 +298,7 @@ function build(cams){
   }
   built=true;
 }
-let bigCh=null, bigName='';
+let bigCh=null, bigName='', imgReady=false;
 async function doScan(){
   const b=document.getElementById('scanbtn');
   b.disabled=true; b.textContent='Sanalyapti…';
@@ -310,7 +311,10 @@ async function doScan(){
 // Ramkalar tahlil paytidagi holatni ko'rsatadi, rasm esa jonli. Odam
 // yurayotgan bo'lsa eski ramka noto'g'ri joyda turadi (eskalatorda aynan
 // shunday bo'ldi). Shuning uchun eskirgan ramka umuman chizilmaydi.
-const BOX_MAX_AGE = 2.0;
+// Ramkalar 0.5 sekundda yangilanadi, shuning uchun 1.2 sekunddan eskisi
+// tahlil orqada qolganini bildiradi — bunday ramkani ko'rsatgandan
+// ko'rsatmagan yaxshi.
+const BOX_MAX_AGE = 1.2;
 function drawBoxes(boxes){
   const wrap=document.getElementById('bigwrap'), img=document.getElementById('bigimg');
   for(const el of [...wrap.querySelectorAll('.ov')]) el.remove();
@@ -325,18 +329,23 @@ function drawBoxes(boxes){
   }
 }
 function openBig(ch,name){
-  bigCh=ch; bigName=name;
+  bigCh=ch; bigName=name; imgReady=false;
+  drawBoxes([]);          // eski kameraning ramkalari qolib ketmasin
   const img=document.getElementById('bigimg');
+  // MJPEG da birinchi kadr kelguncha <img> bo'sh (qora) turadi. Ramkalarni
+  // shu paytda chizsak, qora fonda osilib qolgan ramkalar ko'rinadi —
+  // Sardor ko'rgan holat aynan shu edi.
+  img.onload=()=>{ imgReady=true; };
   // Oqim uzilsa <img> qora qolib ketardi, ramkalar esa ustida turaverardi.
   // Endi uzilganda qayta ulanadi va ramkalar tozalanadi.
-  img.onerror=()=>{ drawBoxes([]);
+  img.onerror=()=>{ imgReady=false; drawBoxes([]);
     if(bigCh===ch) setTimeout(()=>{ if(bigCh===ch) openBig(ch,name); }, 1000); };
   img.src='/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1&t='+Date.now();
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
 function closeBig(){
-  bigCh=null; drawBoxes([]);
+  bigCh=null; imgReady=false; drawBoxes([]);
   document.getElementById('bigimg').src='';   // oqimni uzamiz, fokus bo'shaydi
   document.getElementById('big').classList.remove('on');
 }
@@ -382,7 +391,7 @@ async function tick(){
     if(c.channel===bigCh){
       document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
       document.getElementById('bigcount').textContent=c.count;
-      const fresh = c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
+      const fresh = imgReady && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
       drawBoxes(fresh ? (c.boxes||[]) : []);
       document.getElementById('bigage').textContent =
         c.boxes_age==null ? '' : (fresh ? '' : `ramkalar ${c.boxes_age}s eski`);
@@ -476,6 +485,7 @@ def stream(branch, channel):
     if cam is None:
         return "yo'q", 404
     big = request.args.get("big") == "1"
+    token = cam.branch.new_stream_token() if big else None
 
     def gen():
         last = -1
@@ -484,7 +494,13 @@ def stream(branch, channel):
             # Ilgari fokus faqat bosilganda yoqilardi va TTL 6 sekundda
             # so'nardi, ya'ni amalda hech qachon ishlamasdi: 15 kamera
             # birdek sekin so'ralib, hammasi 0.7 kadr/sek edi.
-            if big:
+            # Faqat ENG OXIRGI so'rov fokusni belgilaydi. Eskisi oqimni
+            # davom ettiradi, lekin fokusni tortmaydi — aks holda kamera
+            # almashtirilganda ikkisi navbatlashib, ekran qorayardi.
+            #
+            # Eskisini butunlay to'xtatib bo'lmaydi: bir vaqtda ikki kishi
+            # qarashi mumkin va ikkinchisi birinchisini o'chirib qo'ymasin.
+            if big and token == cam.branch.stream_token:
                 cam.branch.set_focus(channel)
             if cam.seq != last:
                 last = cam.seq
