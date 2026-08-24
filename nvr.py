@@ -89,6 +89,17 @@ ENABLED = [b.strip() for b in
 MAX_CONN = 10             # bitta NVR ga bir vaqtda shuncha so'rov
 FOCUS_WORKERS = 6         # ochilgan kamerani shuncha oqim bilan tortamiz
 FETCH_TIMEOUT = 2.0       # kadr so'rovi shuncha kutadi, keyin qaytadan
+
+# Keyframe majburlash TEZLIKNI oshiradi, lekin SIFATNI tushiradi: kamera
+# bir xil bitrate'ni ko'proq I-frame'ga bo'lib beradi va har biri kambag'al
+# chiqadi. O'lchandi (B4, 1024 kbps):
+#     uzluksiz   9.12 kadr/sek   tiniqlik  865
+#     150 ms     5.75            1676        <- standart
+#     300 ms     3.19            2111
+#     1 sekund   1.50            2578
+# B1 da farq yo'q (sahna sodda, kamera baribir kam bit sarflaydi) — Sardor
+# aynan shuni sezgan: B1 yaxshi, B4/B2 "bijir-bijir".
+KEYFRAME_GAP = float(os.environ.get("KEYFRAME_GAP", "0.15"))
 # Grid kameralari MUZLATILGAN: doimiy so'rov yubormaydi, oxirgi kadr turadi.
 # Sardorning talabi — 15 kamera birdaniga ishlashi kerak emas, kamera faqat
 # bosib kirilganda ishlasin. Bu qotishning ham sababi edi: 15 kamera bir
@@ -256,6 +267,9 @@ class Branch:
                     sess.put(url, timeout=FETCH_TIMEOUT)
             except Exception:
                 time.sleep(0.2)
+                continue
+            if KEYFRAME_GAP:
+                time.sleep(KEYFRAME_GAP)
 
     # ── fokus ────────────────────────────────────────────────────────
     def set_focus(self, channel):

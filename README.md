@@ -140,7 +140,26 @@ bo'lmasa ehtiyotkor qiymat olingan va `detectors.py` da izohlangan.
 - **NVR qulflanadi.** Hikvision ko'p parallel digest so'rovni hujum deb biladi
   va akkauntni ~26 daqiqaga bloklaydi. Kod buni sezadi va qulf ochilishini
   kutadi, lekin qo'lda ko'p so'rov yubormaslik kerak.
-- **Yangi kadr sekundiga ~4 ta.** Bu NVR snapshot yo'lining chegarasi, kod
+- **Sifat va tezlik almashuvi.** `requestKeyFrame` tezlikni oshiradi, lekin
+kamera bir xil bitrate'ni ko'proq I-frame'ga bo'lgani uchun har bir kadr
+sifatsizroq chiqadi. O'lchandi (B4):
+
+| Keyframe oralig'i | Kadr/sek | Tiniqlik |
+|---|---|---|
+| uzluksiz | 9.1 | 865 |
+| **150 ms** (standart) | 4.7 | **1702** |
+| 300 ms | 3.2 | 2111 |
+| 1 sekund | 1.5 | 2578 |
+
+Sodda sahnali kameralarda (B1) farq yo'q — kamera baribir kam bit sarflaydi.
+Boshqacha kerak bo'lsa:
+
+```bash
+KEYFRAME_GAP=0.3 ./venv/bin/python app.py    # tiniqroq, sekinroq
+KEYFRAME_GAP=0   ./venv/bin/python app.py    # tezroq, xiraroq
+```
+
+**Yangi kadr sekundiga ~4 ta.** Bu NVR snapshot yo'lining chegarasi, kod
   aybi emas: kamera GovLength=20 va 20 kadr/sek bilan ishlaydi, ya'ni yangi
   I-frame sekundiga bir marta. `requestKeyFrame` uni majburlab ~4 ga
   chiqaradi. Undan yuqorisi uchun kamerada GovLength ni kamaytirish kerak —
