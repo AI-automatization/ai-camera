@@ -26,6 +26,7 @@ from flask import (Flask, Response, jsonify, render_template_string,
                    request, send_file)
 
 import nvr
+import enhance
 import rules
 import faces
 import pose
@@ -189,6 +190,9 @@ PAGE = """
  #tabs button{background:transparent;color:var(--dim);border:1px solid var(--line);
    border-radius:20px;padding:4px 14px;cursor:pointer;font-size:13px}
  #tabs button.act{background:var(--card);color:var(--fg);border-color:#6b5b45}
+ #scanbtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
+   border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
+ #scanbtn:disabled{opacity:.5;cursor:default}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
@@ -241,10 +245,12 @@ PAGE = """
   <h1>MARS audit kamerasi</h1>
   <span id=tabs></span>
   <span class=total><b id=total>0</b> odam</span>
+  <button id=scanbtn onclick="doScan()">Sanash</button>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
 <div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><span class=dim id=bigfps></span>
+  <button id=clearbtn onclick="toggleClear()">Tiniqlashtirish</button>
   <button onclick="closeBig()">Yopish</button></div></div>
 <main>
   <div class=grid id=grid></div>
@@ -285,7 +291,18 @@ function build(cams){
   }
   built=true;
 }
-let bigCh=null;
+let bigCh=null, bigName='', clearOn=false;
+async function doScan(){
+  const b=document.getElementById('scanbtn');
+  b.disabled=true; b.textContent='Sanalyapti…';
+  await fetch('/scan/'+encodeURIComponent(branch),{method:'POST'});
+}
+function toggleClear(){
+  clearOn=!clearOn;
+  document.getElementById('clearbtn').textContent =
+    clearOn ? 'Asl kadr' : 'Tiniqlashtirish';
+  if(bigCh) openBig(bigCh,bigName);
+}
 // Ramkalar rasmga CHIZILMAYDI — ular rasm ustidagi HTML elementlar.
 // Sabab: chizish uchun kadrni dekod qilib, qayta kodlash kerak edi va bu
 // rasmni ikkinchi marta siqib xiralashtirardi. Endi kadr kameradan
@@ -304,9 +321,9 @@ function drawBoxes(boxes){
   }
 }
 function openBig(ch,name){
-  bigCh=ch;
+  bigCh=ch; bigName=name;
   document.getElementById('bigimg').src=
-    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1';
+    '/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1'+(clearOn?'&clear=1':'');
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
@@ -316,6 +333,7 @@ function closeBig(){
   document.getElementById('big').classList.remove('on');
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
+let lastScan=-1;
 async function tick(){
   const s=await (await fetch('/state'+(branch?'?branch='+encodeURIComponent(branch):''))).json();
   branch=s.branch;
@@ -327,8 +345,14 @@ async function tick(){
   document.getElementById('total').textContent=total;
   const warn = s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa qoldi`
              : (!s.reachable ? 'NVR ga ulanmadi' : '');
+  const b=document.getElementById('scanbtn');
+  b.disabled=s.scanning;
+  b.textContent = s.scanning ? 'Sanalyapti…' : 'Sanash';
+  const ago = s.scanned_ago==null ? '' :
+    (s.scanned_ago<60 ? `${s.scanned_ago} sek oldin` : `${Math.floor(s.scanned_ago/60)} daqiqa oldin`);
   document.getElementById('meta').textContent =
     (warn ? warn+' · ' : '') +
+    (ago ? `sanoq ${ago} · ` : '') +
     `${s.online}/${s.cameras.length} kamera · `+
     `${s.rules} qoida · ${s.detectors} detektor`;
   document.getElementById('meta').style.color = warn ? '#e08a8a' : '';
@@ -342,9 +366,9 @@ async function tick(){
     const b=document.getElementById('b'+c.channel);
     b.textContent=c.identity?'yuz aniq':'yuz kichik';
     b.className='idbadge '+(c.identity?'idok':'idno');
-    // Katta ko'rinish ochiq bo'lsa grid kadrlarini so'ramaymiz — butun
-    // tezlik budjeti ochilgan kameraga ketsin.
-    if(bigCh===null)
+    // Grid MUZLATILGAN — kadrlar faqat sanashdan keyin yangilanadi.
+    // Kameralar doimiy ishlamaydi, ichiga bosib kirilganda ishlaydi.
+    if(bigCh===null && lastScan!==s.scanned_ago)
       document.getElementById('s'+c.channel).src=
         '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh){
@@ -352,6 +376,7 @@ async function tick(){
       drawBoxes(c.boxes||[]);
     }
   }
+  lastScan = s.scanned_ago;
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
       <span class="tag ${e.rule_type}">${e.rule_number} · ${e.score} ball</span>
@@ -396,11 +421,24 @@ def state():
     done, _ = detectors.status()
     locked, left = br.lock_state() if br else (False, 0)
     return jsonify(branch=name, branches=list(nvr.BRANCHES),
+                   scanning=bool(br and br.scanning),
+                   scanned_ago=int(time.time() - br.scanned_at)
+                   if br and br.scanned_at else None,
                    reachable=(br.reachable is not False) if br else False,
                    cameras=cams, events=events,
                    online=sum(1 for c in cams if c["online"]),
                    locked=locked, lock_left=left,
                    rules=len(rules.load()), detectors=len(done))
+
+
+@app.post("/scan/<branch>")
+def scan(branch):
+    """Bitta sanash aylanishi. Grid muzlatilgan, sanoq shu tugma bilan."""
+    br = nvr.BRANCHES.get(branch)
+    if br is None:
+        return jsonify(ok=False), 404
+    br.request_scan()
+    return jsonify(ok=True)
 
 
 @app.get("/still/<branch>/<channel>")
@@ -425,6 +463,8 @@ def stream(branch, channel):
     if cam is None:
         return "yo'q", 404
     big = request.args.get("big") == "1"
+    # Yaxshilash FAQAT ekran uchun — modelga asl kadr boradi (enhance.py ga qara)
+    clear = request.args.get("clear") == "1"
 
     def gen():
         last = -1
@@ -437,8 +477,11 @@ def stream(branch, channel):
                 cam.branch.set_focus(channel)
             if cam.seq != last:
                 last = cam.seq
+                data = cam.snapshot()
+                if clear:
+                    data = enhance.enhance_jpeg(data)
                 yield (b"--f\r\nContent-Type: image/jpeg\r\n\r\n"
-                       + cam.snapshot() + b"\r\n")
+                       + data + b"\r\n")
             else:
                 time.sleep(0.02)
 

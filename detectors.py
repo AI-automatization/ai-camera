@@ -213,9 +213,15 @@ class Context:
 
     @property
     def head_count(self):
-        """Kadrdagi odamlar soni — pose ishonchliroq, bo'lmasa yuz."""
-        reliable = [p for p in self.persons if p["reliable"]]
-        return len(reliable) if self.persons else len(self.faces)
+        """Kadrdagi odamlar soni.
+
+        pose.people() allaqachon saralab, dublikatlarni yig'ib bergan —
+        shuning uchun hammasi sanaladi. Ilgari bu yerda faqat reliable
+        (holati o'qiladigan) odamlar sanalardi va stolga yarim yashiringan
+        odam tushib qolardi: "reliable" degani "bu odam" emas, "uning
+        o'tirgan/turganini aytish mumkin" degani.
+        """
+        return len(self.persons) if self.persons else len(self.faces)
 
 
 # ─────────────────────────────────────────────────── 1-daraja (yuz+jadval)

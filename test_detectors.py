@@ -172,6 +172,27 @@ def main():
     run("30 sekund uzilishdan keyin nolga tushadi",
         s.update("k", False, 130.0) == 0.0 and s.update("k", True, 131.0) < 1.0)
 
+    print("\n── Odam sanash")
+    # head_count "odam bormi" ni sanashi kerak, "holati o'qiladimi" ni emas.
+    # Bu farq jonli sinovda chiqdi: stolga yarim yashiringan odam
+    # reliable=False bo'lgani uchun umuman sanalmasdi.
+    hidden = [person(reliable=False) for _ in range(3)]
+    c = ctx("1601", persons=hidden)
+    run("holati o'qilmaydigan odam ham sanaladi", c.head_count == 3)
+    c = ctx("1601", persons=[person(), person(reliable=False)])
+    run("aralash holatda hammasi sanaladi", c.head_count == 2)
+    c = ctx("1601", faces=[{"box": (0, 0, 90, 110), "name": None, "score": 0.3}])
+    run("pose bo'lmasa yuz bo'yicha sanaydi", c.head_count == 1)
+
+    print("\n── Dublikat qutilarni yig'ish")
+    import pose as _pose
+    # Bir odamga ikkita quti: biri ikkinchisining ichida (jonli holat, B1)
+    big_box, small_box = (100, 100, 200, 400), (120, 120, 190, 280)
+    run("ichma-ich quti dublikat deb topiladi",
+        _pose._inside(small_box, big_box) >= _pose.DUP_INSIDE)
+    run("uzoq qutilar dublikat emas",
+        _pose._inside((100, 100, 200, 400), (500, 500, 600, 800)) == 0.0)
+
     print("\n── Dashboard JS sintaksisi")
     run("sahifa skripti buzilmagan", _page_js_ok())
 

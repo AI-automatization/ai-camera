@@ -22,11 +22,38 @@ from ultralytics import YOLO
 
 MODEL = "yolov8s-pose.pt"
 IMGSZ = 960
-CONF = 0.25
+# Quti ishonchi ALDAMCHI — odam sanashda unga tayanib bo'lmaydi.
+# O'lchandi (B1, deraza oldida o'tirgan odam): quti ishonchi 0.05, ya'ni
+# 0.25 chegarada butunlay tushib qolardi. Ayni o'sha topilmaning yelka
+# nuqtasi 0.94 va 12 ta kuchli nuqtasi bor edi — ya'ni model odamni ANIQ
+# ko'rgan, faqat qutiga past ball bergan.
+#
+# Shuning uchun: modeldan HAMMASI olinadi (0.05), saralash esa NUQTALAR
+# bo'yicha. Eski demo.py da ham shu xulosa yozilgan edi: "odamda yelka
+# 0.90-0.98, arvoh qutilarda 0.01-0.15".
+CONF = 0.05
 KP_CONF = 0.30          # nuqta ishonchi shundan past bo'lsa hisobga olinmaydi
-SHOULDER_MIN = 0.80     # yelka ishonchi — ryukzak/stulni odam deb o'qimaslik uchun
-STRONG_KP_MIN = 6       # kamida shuncha ishonchli nuqta
-PERSON_MIN_H = 80       # bundan kichik odamda holat o'qish ishonchsiz
+# Ikki xil savol, ikki xil chegara. Ilgari bittasi ishlatilardi va shu sababli
+# yarim to'silgan odam umuman sanalmasdi (A2 da ikki kishidan biri tushib
+# qolgan edi).
+#   SANASH  — bu odammi? (yumshoqroq: stolga yashiringan odam ham odam)
+#   HOLAT   — o'tirganmi / boshi pastdami? (qattiq: nuqtalar aniq bo'lsin)
+COUNT_SHOULDER_MIN = 0.85   # sanash uchun yelka ishonchi (nuqta, quti emas)
+COUNT_KP_MIN = 8            # va kamida shuncha ishonchli nuqta
+POSTURE_SHOULDER_MIN = 0.80  # holat o'qish uchun
+POSTURE_KP_MIN = 6
+PERSON_MIN_H = 45       # bundan kichik odamda nuqtalar ishonchsiz
+
+# Dublikat qutilar. YOLO bitta odamga ikkita quti berishi mumkin (o'lchandi:
+# A2 da bir kishida ikkita, Coworking da chap burchakda beshta ustma-ust).
+# Ularning IoU si past bo'lgani uchun modelning o'z NMS i ajratmaydi, lekin
+# bo'yin nuqtasi (yelkalar o'rtasi) deyarli bir joyda bo'ladi.
+DUP_IOU = 0.55          # qutilar shuncha ustma-ust tushsa — bitta odam
+DUP_NECK = 0.30         # yoki bo'yin nuqtalari bo'yning shuncha ulushida yaqin
+# Yoki kichik quti kattasining ichida yotsa. IoU buni ushlamaydi: B1 da
+# bitta turgan odamga (415,116)-(454,224) va (387,149)-(451,320) qutilari
+# tushdi, IoU atigi 0.22 — lekin kichigining 64% i kattasining ichida edi.
+DUP_INSIDE = 0.60
 
 # COCO-17 nuqta indekslari
 NOSE = 0
@@ -71,43 +98,113 @@ def infer(frame):
     return m(frame, conf=CONF, imgsz=IMGSZ, device=dev, verbose=False)[0]
 
 
+def _neck(k):
+    """Yelkalar o'rtasi — odamni belgilovchi barqaror nuqta.
+
+    Yelka ko'rinmasa burun, u ham bo'lmasa None.
+    """
+    pts = [p for p in (k[L_SH], k[R_SH]) if p[2] >= 0.25]
+    if pts:
+        return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+    if k[NOSE][2] >= 0.25:
+        return (k[NOSE][0], k[NOSE][1])
+    return None
+
+
+def _iou(a, b):
+    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
+    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _inside(a, b):
+    """Kichik quti kattasining qancha qismi ichida (0..1)."""
+    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
+    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    small = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / small if small > 0 else 0.0
+
+
+def _dedupe(cands):
+    """Bir odamga tushgan bir necha qutini bittaga yig'adi.
+
+    Kuchliroq nomzod (ishonchli nuqtasi ko'pi, keyin quti ishonchi) qoladi.
+    """
+    cands = sorted(cands, key=lambda p: (p["strong"], p["conf"]), reverse=True)
+    kept = []
+    for c in cands:
+        dup = False
+        for k in kept:
+            if _iou(c["box"], k["box"]) >= DUP_IOU:
+                dup = True
+                break
+            if _inside(c["box"], k["box"]) >= DUP_INSIDE:
+                dup = True
+                break
+            if c["neck"] and k["neck"]:
+                d = ((c["neck"][0] - k["neck"][0]) ** 2
+                     + (c["neck"][1] - k["neck"][1]) ** 2) ** 0.5
+                if d <= DUP_NECK * min(c["height"], k["height"]):
+                    dup = True
+                    break
+        if not dup:
+            kept.append(c)
+    return kept
+
+
 def people(res):
-    """Pose natijasidan odamlar ro'yxati.
+    """Pose natijasidan odamlar ro'yxati (dublikatlar yig'ilgan).
 
     Har biri: {box, height, keypoints, seated, head_down, reliable}
-    reliable=False — nuqtalar zaif, holatga qarab qaror qilinmasin
-    (odam uzoq, kadr chetida kesilgan yoki bu umuman odam emas).
+    reliable=False — nuqtalar holat o'qish uchun zaif. Bunday odam ham
+    SANALADI, faqat "o'tirganmi/uxlayaptimi" degan savolga javob berilmaydi.
     """
     if res.keypoints is None:
         return []
 
     fh, fw = res.orig_shape[:2]
-    out = []
+    cands = []
     for kp, box in zip(res.keypoints.data, res.boxes):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         h = y2 - y1
         k = kp.tolist()
+        strong = sum(1 for p in k if p[2] >= 0.5)
+        shoulder = max(k[L_SH][2], k[R_SH][2])
+
+        # Odam sifatida sanaladimi. Ikkala shart ham bajarilishi kerak:
+        # yolg'iz yelka ishonchi stul suyanchig'ida ham yuqori chiqishi
+        # mumkin, yolg'iz nuqta soni esa soyada.
+        if h < PERSON_MIN_H:
+            continue
+        if shoulder < COUNT_SHOULDER_MIN or strong < COUNT_KP_MIN:
+            continue
 
         # Kadr chetida kesilgan odamning qutisi haqiqiy tana chegarasi emas —
-        # bo'yga nisbatan o'lchangan hamma narsa buziladi.
+        # bo'yga nisbatan o'lchangan hamma narsa buziladi, holat o'qilmaydi.
         clipped = x1 <= 3 or y1 <= 3 or x2 >= fw - 3 or y2 >= fh - 3
-        strong = sum(1 for p in k if p[2] >= 0.5)
-        reliable = (
-            not clipped
-            and h >= PERSON_MIN_H
-            and max(k[L_SH][2], k[R_SH][2]) >= SHOULDER_MIN
-            and strong >= STRONG_KP_MIN
-        )
+        posture_ok = (not clipped and h >= 80
+                      and shoulder >= POSTURE_SHOULDER_MIN
+                      and strong >= POSTURE_KP_MIN)
 
-        out.append({
+        cands.append({
             "box": (x1, y1, x2, y2),
             "height": h,
             "conf": float(box.conf[0]),
             "keypoints": k,
-            "reliable": reliable,
-            "seated": _seated(k, h) if reliable else None,
-            "head_down": _head_down(k, y1, h) if reliable else None,
+            "strong": strong,
+            "neck": _neck(k),
+            "reliable": posture_ok,
         })
+
+    out = []
+    for c in _dedupe(cands):
+        k, h, y1 = c["keypoints"], c["height"], c["box"][1]
+        c["seated"] = _seated(k, h) if c["reliable"] else None
+        c["head_down"] = _head_down(k, y1, h) if c["reliable"] else None
+        out.append(c)
     return out
 
 

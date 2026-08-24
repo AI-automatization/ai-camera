@@ -79,14 +79,15 @@ ENABLED = [b.strip() for b in
 MAX_CONN = 6              # bitta NVR ga bir vaqtda shuncha so'rov
 FOCUS_WORKERS = 2         # ochilgan kamerani shuncha oqim bilan tortamiz
                           # (3 tasi yomonroq: 3.62 < 3.75 yangi kadr/sek)
-# Fon kameralari BIRDANIGA ishlamaydi — bitta skaner ip ularni NAVBAT BILAN
-# aylanib chiqadi. Ilgari har kamerada o'z ipi bor edi va 15 tasi bir vaqtda
-# uyg'onib, ulanish limitini band qilardi: ochilgan kamera ular tugaguncha
-# kutib turardi va video 0.7-2.1 sekundga qotardi (o'lchandi, Yunusobod B3).
+# Grid kameralari MUZLATILGAN: doimiy so'rov yubormaydi, oxirgi kadr turadi.
+# Sardorning talabi — 15 kamera birdaniga ishlashi kerak emas, kamera faqat
+# bosib kirilganda ishlasin. Bu qotishning ham sababi edi: 15 kamera bir
+# vaqtda uyg'onib, ulanish limitini band qilardi va ochilgan kamera 0.7-2.1
+# sekundga muzlab qolardi (o'lchangan, Yunusobod B3).
 #
-# Kamera ochilganda skaner BUTUNLAY to'xtaydi — butun budjet o'shanga ketadi.
+# Sanoq esa: ishga tushganda bir marta aylanib chiqiladi, keyin faqat
+# so'ralganda (sahifadagi "Sanash" tugmasi) yoki kamera ochilganda.
 SCAN_GAP = 0.7            # navbatdagi kameralar orasidagi tanaffus
-SCAN_ROUND_REST = 8.0     # bir aylanish tugagach dam
 FOCUS_TTL = 6.0           # brauzer jim qolsa fokus bekor bo'ladi
 REACH_TIMEOUT = 4         # filial ulanadimi — shuncha kutamiz
 
@@ -114,6 +115,9 @@ class Branch:
         self._lock_checked = 0.0
         self.reachable = None          # None = hali tekshirilmagan
         self.focus = {"channel": None, "until": 0.0}
+        self._scan_wanted = threading.Event()
+        self.scanning = False
+        self.scanned_at = 0.0
         self.cameras = {ch: Camera(self, ch, nm) for ch, nm in cameras.items()}
 
     # ── qulf ─────────────────────────────────────────────────────────
@@ -180,29 +184,36 @@ class Branch:
             threading.Thread(target=self._focus_worker, daemon=True).start()
         threading.Thread(target=self._keyframe_worker, daemon=True).start()
         threading.Thread(target=self._scanner, daemon=True).start()
+        self.request_scan()          # ishga tushganda bir marta — grid bo'sh qolmasin
 
     def _scanner(self):
-        """Odam sanash uchun kameralarni NAVBAT BILAN aylanib chiqadi.
+        """Faqat SO'RALGANDA bir marta aylanib chiqadi (doimiy emas).
 
-        Bir vaqtda faqat BITTA fon so'rovi bo'ladi. Kamera ochilgan bo'lsa
-        umuman so'ramaydi — ochilgan kamera butun budjetni oladi.
+        request_scan() bayroq qo'yadi, bu ip ko'rib bajaradi. Aylanish
+        davomida kamera ochilsa — darhol to'xtaydi, ochilgan kamera
+        muhimroq.
         """
         sess = requests.Session()
         sess.auth = HTTPDigestAuth(USER, PASSWORD)
-        order = list(self.cameras.values())
-        i = 0
         while True:
-            if self.focused_channel():
-                time.sleep(0.5)          # kimdir qarab turibdi — tegmaymiz
+            if not self._scan_wanted.wait(timeout=1.0):
                 continue
-            if self.reachable is False or time.time() < self.locked_until:
-                time.sleep(5)
-                continue
-            cam = order[i % len(order)]
-            i += 1
-            if cam.fetch_once(sess) == Camera.FAIL:
-                cam.online = False
-            time.sleep(SCAN_ROUND_REST if i % len(order) == 0 else SCAN_GAP)
+            self._scan_wanted.clear()
+            self.scanning = True
+            for cam in list(self.cameras.values()):
+                if self.focused_channel():
+                    break                # kimdir qarab turibdi — to'xtaymiz
+                if self.reachable is False or time.time() < self.locked_until:
+                    break
+                if cam.fetch_once(sess) == Camera.FAIL:
+                    cam.online = False
+                time.sleep(SCAN_GAP)
+            self.scanning = False
+            self.scanned_at = time.time()
+
+    def request_scan(self):
+        """Bitta sanash aylanishini so'raydi."""
+        self._scan_wanted.set()
 
     def _keyframe_worker(self):
         """Ochilgan kameradan uzluksiz yangi I-frame so'raydi.
