@@ -118,7 +118,9 @@ def analyzer():
 
         cam.apply({"faces": found, "persons": persons, "events": events,
                    "zone": ctx.zone, "count": ctx.head_count,
-                   "named": ctx.named})
+                   "named": ctx.named,
+                   "identity": ctx.identity_reliable,
+                   "face_px": max((f["box"][2] for f in found), default=0)})
 
         for ev in events:
             ev["camera"] = cam.name
@@ -153,6 +155,9 @@ PAGE = """
  .cam img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#000}
  .cam .lbl{padding:7px 10px;display:flex;justify-content:space-between;gap:8px}
  .cam .zone{color:var(--dim);font-size:12px}
+ .cam .meta2{padding:0 10px 8px;display:flex;justify-content:space-between;
+   font-size:11px;color:var(--dim)}
+ .idok{color:#9fd89f} .idno{color:#c99}
  .cam.hit{outline:2px solid #d9534f}
  aside{background:var(--card);border:1px solid var(--line);border-radius:8px;
    padding:12px;max-height:calc(100vh - 120px);overflow:auto}
@@ -185,7 +190,9 @@ function build(cams){
     const d=document.createElement('div'); d.className='cam'; d.id='c'+c.channel;
     d.innerHTML=`<img src="/stream/${c.channel}">
       <div class=lbl><span>${c.name}</span>
-      <span class=zone>${c.zone||''}</span></div>`;
+      <span class=zone>${c.zone||''}</span></div>
+      <div class=meta2><span>${c.count} odam</span>
+      <span class="${c.identity?'idok':'idno'}">${c.identity?'yuz o\'qildi':'yuz kichik'}</span></div>`;
     d.querySelector('img').onclick=()=>fetch('/focus/'+c.channel,{method:'POST'});
     grid.appendChild(d);
   }
@@ -233,6 +240,8 @@ def state():
             "channel": ch, "name": cam.name, "online": cam.online,
             "zone": detectors.ZONES.get(nvr.BRANCH, {}).get(ch),
             "count": st.get("count", 0), "named": st.get("named", []),
+            "identity": st.get("identity", False),
+            "face_px": st.get("face_px", 0),
             "hit": ch in hits,
         })
     done, _ = detectors.status()

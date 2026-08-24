@@ -114,6 +114,30 @@ def main():
         fired += det.check(c)
     run("dars yo'q vaqtda xonada uxlash — signal yo'q", fired == [])
 
+    print("\n── Yuz o'qilmasa ayblov qo'yilmaydi (jonli sinovda topilgan)")
+    # B3 holati: dars ketyapti, 6 kishi bor, yuzlar 18-41px — hech kim tanilmadi.
+    # Bu "mentor yo'q" degani EMAS, "ko'ra olmadim" degani.
+    small = [{"box": (0, 0, 25, 30), "name": None, "score": 0.25}
+             for _ in range(3)]
+    c = ctx("1601", faces=small, persons=[person() for _ in range(6)])
+    run("kichik yuzlar — identity ishonchsiz", c.identity_reliable is False)
+    det = detectors.LeftRoom()
+    fired = []
+    for minutes in (0, 3, 6, 9):
+        c = ctx("1601", faces=small, persons=[person() for _ in range(6)],
+                now=datetime.datetime.combine(datetime.date.today(),
+                                              datetime.time(10, 20))
+                    + datetime.timedelta(minutes=minutes))
+        fired += det.check(c)
+    run("dars vaqtida ham yolg'on 'mentor yo'q' signali yo'q", fired == [])
+
+    big = [{"box": (0, 0, 90, 110), "name": None, "score": 0.3}]
+    c = ctx("1601", faces=big)
+    run("katta yuz — identity ishonchli", c.identity_reliable is True)
+    c = ctx("1601", faces=[{"box": (0, 0, 20, 25), "name": "Akrom", "score": 0.7}])
+    run("kichik bo'lsa ham tanilgan bo'lsa — ishonchli",
+        c.identity_reliable is True)
+
     print("\n── Streak: uzilish holatni bekor qiladi")
     s = detectors.Streak(gap_tol=10.0)
     s.update("k", True, 100.0)

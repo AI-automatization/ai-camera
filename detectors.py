@@ -69,6 +69,11 @@ ADMIN_LOITER_MIN = 5      # 3.8: administratsiya zonasida shuncha turish
 GATHERING_MIN = 5         # 2.5: coworkingda uzoq turib gaplashish
 GATHERING_PEOPLE = 3      # shuncha odam yig'ilsa
 SLEEP_MIN = 1.0           # 3.10/3.11: bosh shuncha vaqt pastda tursa
+# SFace 112x112 kirish bilan ishlaydi. Bundan kichik yuz kattalashtirilganda
+# yangi ma'lumot qo'shilmaydi — ball shovqinga aylanadi. Jonli o'lchandi
+# (Yunusobod, 2026-08-24): 13-41px yuzlar 0.21-0.30 ball berdi, ya'ni hech kim
+# tanilmadi. Shundan past yuzda "kim ekani" savoliga javob YO'Q deymiz.
+MIN_FACE_PX = 60
 SEATED_SHARE = 0.7        # 2.10: mentor dars vaqtining shuncha qismini o'tirsa
 COOLDOWN_SEC = 900        # bitta qoida bitta odamga shuncha vaqtda bir marta
 
@@ -188,6 +193,25 @@ class Context:
         return [f["name"] for f in self.faces if f["name"]]
 
     @property
+    def identity_reliable(self):
+        """Bu kadrda "kim" savoliga umuman javob bera olamizmi.
+
+        MUHIM: "hech kim tanilmadi" ikki xil ma'noni bildiradi —
+          (a) xodim yo'q, yoki
+          (b) yuzlar juda kichik/burchakda, tanish ishlamadi.
+        Ikkalasini ajratmasak, kamera har darsda "mentor yo'q" deb yolg'on
+        ayblov qo'yadi. Jonli sinovda aynan shunday bo'lishiga oz qoldi:
+        B3 da dars ketyapti, 6 kishi bor, yuzlar 18-41px — hech kim tanilmadi.
+
+        Shuning uchun: kamida bitta yuz SFace ishlay oladigan o'lchamda
+        bo'lsagina "bilaman" deymiz. Aks holda identity-ga tayanadigan
+        detektorlar jim turadi.
+        """
+        if any(f["name"] for f in self.faces):
+            return True
+        return any(f["box"][2] >= MIN_FACE_PX for f in self.faces)
+
+    @property
     def head_count(self):
         """Kadrdagi odamlar soni — pose ishonchliroq, bo'lmasa yuz."""
         reliable = [p for p in self.persons if p["reliable"]]
@@ -234,6 +258,9 @@ class LeftRoom(Detector):
         lesson = ctx.lesson
         if lesson is None or ctx.zone != CLASSROOM:
             return []
+        # Yuzlarni umuman o'qiy olmayotgan bo'lsak — mentor yo'q deb ayblamaymiz
+        if not ctx.identity_reliable:
+            return []
         # O'quvchilar bor, lekin kattalardan hech kim tanilmadi
         students_present = ctx.head_count > 0
         mentor_present = bool(ctx.named)
@@ -260,7 +287,7 @@ class AloneWithStudent(Detector):
     gap_tol = 30.0
 
     def check(self, ctx):
-        if ctx.zone != CLASSROOM:
+        if ctx.zone != CLASSROOM or not ctx.identity_reliable:
             return []
         alone = ctx.head_count == 2 and len(ctx.named) == 1
         seconds = self.streak.update(f"{ctx.channel}:alone", alone, ctx.now.timestamp())
@@ -311,7 +338,8 @@ class LateArrival(Detector):
     name = "late_arrival"
 
     def check(self, ctx):
-        if ctx.zone != CLASSROOM:
+        # 2.1 "mentor hali kelmadi" deydi — bu identity savoli, ko'r bo'lsak jim.
+        if ctx.zone != CLASSROOM or not ctx.identity_reliable:
             return []
         lesson = schedule.upcoming_lesson(ctx.room, at=ctx.now, branch=ctx.branch,
                                           within_min=schedule.EARLY_MIN)
