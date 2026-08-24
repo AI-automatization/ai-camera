@@ -278,3 +278,41 @@ def remove(name):
         _save(META_DB, meta)
     _db_cache["mtime"] = None
     return True, f"{name} o'chirildi"
+
+
+def audit():
+    """Bazadagi muammolarni topadi.
+
+    Yuz tanish sifati bazaga bog'liq. Ikki xil nosozlik jimgina hamma
+    narsani buzadi:
+
+      * BIR ODAM IKKI ISMDA — ikkalasi bir-biriga chegaradan yuqori
+        o'xshaydi, ya'ni kamera qaysi birini aytishini oldindan bilib
+        bo'lmaydi.
+      * ARALASHGAN NAMUNA — bitta ismda turli odamlarning yuzi.
+        Namunalarning o'zaro o'xshashligi juda past bo'lib qoladi.
+
+    Qaytaradi: [{type, ...}] ro'yxati.
+    """
+    db = _load(FACE_DB)
+    known = {n: [_unit(e) for e in v] for n, v in db.items()}
+    problems = []
+
+    names = sorted(known)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            best = max(float(np.dot(x, y)) for x in known[a] for y in known[b])
+            if best >= THRESHOLD:
+                problems.append({"type": "duplicate", "a": a, "b": b,
+                                 "score": round(best, 2)})
+
+    for n, embs in known.items():
+        if len(embs) < 3:
+            continue
+        sims = [float(np.dot(embs[i], embs[j]))
+                for i in range(len(embs)) for j in range(i + 1, len(embs))]
+        worst = min(sims)
+        if worst < 0.10:
+            problems.append({"type": "mixed", "name": n,
+                             "samples": len(embs), "worst": round(worst, 2)})
+    return problems

@@ -230,6 +230,10 @@ PAGE = """
  #people button.go{background:#3d6b3d;color:#dff5df}
  #preview{width:100%;border-radius:8px;margin-top:10px;display:none;
    background:#000;aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1)}
+ #npreview{width:100%;border-radius:8px;margin-top:10px;display:none;
+   background:#000;aspect-ratio:16/9;object-fit:cover}
+ #people select{width:100%;margin-top:8px;background:#14110e;color:var(--fg);
+   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:13px}
  #step{margin-top:8px;font-size:15px;font-weight:600;min-height:20px}
  #bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;
    overflow:hidden;display:none}
@@ -242,6 +246,8 @@ PAGE = """
  .prow .n{flex:1} .prow .s{color:var(--dim);font-size:12px}
  .prow button{padding:3px 9px;font-size:12px;background:transparent;
    border:1px solid var(--line);color:var(--dim)}
+ .warn{margin-top:8px;padding:7px 10px;border-radius:6px;font-size:12px;
+   background:#3a2d2a;color:#e0b3a8;line-height:1.4}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
@@ -305,11 +311,14 @@ PAGE = """
   <button onclick="closeBig()">Yopish</button></div></div>
 <aside id=people>
   <h2>Xodimlar</h2>
-  <div class=hint>Yuz Mac kamerasidan olinadi — NVR kameralarida yuz juda
-    kichik. Kameraga qarab turing va ismni yozib "Qo'shish" ni bosing.
-    Bir odamni turli burchakda bir necha marta qo'shsa tanish yaxshilanadi.</div>
+  <div class=hint>Mac kamerasi — sinash uchun. NVR kamerasida tanish
+    ishlashi uchun namunani <b>o'sha kameraning o'zidan</b> olish kerak:
+    shiftdan qaragan kamera boshqa burchak va yorug'likni ko'radi, portret
+    namunasi unga to'g'ri kelmaydi.</div>
   <input type=text id=pname placeholder="Ism familiya" autocomplete=off>
+  <select id=psrc></select>
   <video id=preview autoplay muted playsinline></video>
+  <img id=npreview>
   <div id=step></div>
   <div id=bar><i></i></div>
   <div class=row>
@@ -317,6 +326,7 @@ PAGE = """
     <button onclick="togglePeople()">Yopish</button>
   </div>
   <div id=msg></div>
+  <div id=pwarn></div>
   <div class=plist id=plist></div>
 </aside>
 <main>
@@ -431,8 +441,26 @@ function togglePeople(){
   if(p.classList.contains("on")) loadPeople();
   else closeCam();          // panel yopilsa kamera ham o'chsin
 }
+async function loadSources(){
+  const sel=document.getElementById("psrc");
+  if(sel.options.length) return;
+  const opts=['<option value="mac">Mac kamera (brauzer)</option>'];
+  for(const b of (await (await fetch("/state")).json()).branches){
+    if(b==="Mac") continue;
+    const s=await (await fetch("/state?branch="+encodeURIComponent(b))).json();
+    for(const c of s.cameras)
+      opts.push(`<option value="${b}/${c.channel}">${b} — ${c.name}</option>`);
+  }
+  sel.innerHTML=opts.join("");
+}
 async function loadPeople(){
+  loadSources();
   const d=await (await fetch('/faces')).json();
+  const warn=d.problems.map(p=> p.type==="duplicate"
+      ? `<div class=warn>${p.a} va ${p.b} bir-biriga o'xshaydi (${p.score}) — bir odam ikki ismdami?</div>`
+      : `<div class=warn>${p.name}: ${p.samples} namuna aralashgan (${p.worst}) — boshqa odamning yuzi tushgan bo'lishi mumkin</div>`
+    ).join("");
+  document.getElementById('pwarn').innerHTML=warn;
   document.getElementById('plist').innerHTML = d.people.map(p=>`
     <div class=prow><span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
@@ -470,6 +498,8 @@ function grab(video){
 async function addFace(){
   const name=document.getElementById("pname").value.trim();
   if(!name){ say("Ismni yozing", false); return; }
+  const src=document.getElementById("psrc").value;
+  if(src!=="mac"){ return addFaceFromNvr(name, src); }
   const btn=document.getElementById("addbtn");
   const vid=document.getElementById("preview"), bar=document.getElementById("bar");
   const step=document.getElementById("step"), fill=bar.querySelector("i");
@@ -504,6 +534,53 @@ async function addFace(){
   closeCam();
   vid.srcObject=null; vid.style.display="none"; bar.style.display="none";
   step.textContent=""; fill.style.width="0"; btn.disabled=false;
+  if(saved) say(name+": "+saved+" ta namuna saqlandi"
+                +(skipped?" ("+skipped+" tasi o'tkazildi)":""), true);
+  else say(lastErr || "Yuz olinmadi", false);
+  document.getElementById("pname").value = saved ? "" : name;
+  loadPeople();
+}
+// NVR kamerasidan olish: kadrni server oladi (brauzer u kameraga ulana
+// olmaydi). Ko'rinish /frame orqali ko'rsatiladi.
+async function addFaceFromNvr(name, src){
+  const [branch, ch]=src.split("/");
+  const btn=document.getElementById("addbtn"), bar=document.getElementById("bar");
+  const step=document.getElementById("step"), fill=bar.querySelector("i");
+  const img=document.getElementById("npreview");
+  btn.disabled=true; bar.style.display="block"; img.style.display="block";
+  say("", true);
+  let alive=true, seq=-1;
+  (async()=>{ while(alive){
+    try{
+      const r=await fetch(`/frame/${encodeURIComponent(branch)}/${ch}?after=${seq}&big=1`);
+      if(r.status===204) continue;
+      if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
+      seq=+r.headers.get("X-Seq");
+      const u=URL.createObjectURL(await r.blob());
+      const old=img.src; img.src=u; if(old.startsWith("blob:")) URL.revokeObjectURL(old);
+    }catch(e){ await new Promise(s=>setTimeout(s,400)); }
+  }})();
+  const total=STEPS.reduce((a,s)=>a+s[1],0);
+  let done=0, saved=0, skipped=0, lastErr="";
+  for(const [text,shots] of STEPS){
+    step.textContent=text;
+    await new Promise(s=>setTimeout(s,1600));
+    for(let i=0;i<shots;i++){
+      try{
+        const d=await (await fetch("/faces",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({name, branch, channel:ch, branches:[branch]})})).json();
+        if(d.ok) saved++; else { skipped++; lastErr=d.message; }
+      }catch(e){ skipped++; lastErr=e.message; }
+      done++; fill.style.width=(done/total*100)+"%";
+      step.textContent=text+"  ("+saved+" ta olindi)";
+      await new Promise(s=>setTimeout(s,600));
+    }
+  }
+  alive=false;
+  img.style.display="none"; img.removeAttribute("src");
+  bar.style.display="none"; step.textContent=""; fill.style.width="0";
+  btn.disabled=false;
   if(saved) say(name+": "+saved+" ta namuna saqlandi"
                 +(skipped?" ("+skipped+" tasi o'tkazildi)":""), true);
   else say(lastErr || "Yuz olinmadi", false);
@@ -657,7 +734,8 @@ def still(branch, channel):
 def faces_list():
     return jsonify(people=faces.people(), branches=list(nvr.BRANCHES),
                    min_px=faces.MIN_RECOGNIZE_PX,
-                   enroll_px=faces.MIN_ENROLL_PX)
+                   enroll_px=faces.MIN_ENROLL_PX,
+                   problems=faces.audit())
 
 
 @app.post("/faces")
