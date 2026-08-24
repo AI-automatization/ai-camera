@@ -136,6 +136,20 @@ def note_lockout():
         print(f"[nvr] akkaunt qulflandi — {left} sekunddan keyin qayta urinamiz")
 
 
+def check_lock_at_startup():
+    """Ishga tushishda bir marta qulfni tekshiradi.
+
+    Aks holda 15 kamera bir vaqtda so'rov yuborib, 15 ta 401 oladi va
+    qulf muddati yana uzayadi. Bitta tekshiruv — 15 ta xato so'rovdan arzon.
+    """
+    left = lock_seconds_left()
+    if left:
+        _locked_until[0] = time.time() + left + 15
+        print(f"[nvr] akkaunt qulflangan — {left} sek ({left // 60} daqiqa). "
+              f"Kameralar qulf ochilgach o'zi ishga tushadi.")
+    return left
+
+
 def lock_state():
     """(qulflanganmi, qolgan sekund) — dashboardda ko'rsatish uchun."""
     left = _locked_until[0] - time.time()

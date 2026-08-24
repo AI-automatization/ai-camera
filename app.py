@@ -80,6 +80,7 @@ def draw(frame, state):
     return frame
 
 
+nvr.check_lock_at_startup()      # qulflangan NVR ga 15 ta so'rov urmaymiz
 CAMERAS = {ch: nvr.Camera(ch, on_frame=draw) for ch in nvr.CAMERAS}
 nvr.start_focus_pool()
 _last_analyzed = {}
