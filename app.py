@@ -298,7 +298,29 @@ function build(cams){
   }
   built=true;
 }
-let bigCh=null, bigName='', imgReady=false;
+let bigCh=null, bigName='', lastFrameAt=0, frameGen=0, lastUrl=null;
+// Kadrlarni O'ZIMIZ so'raymiz, MJPEG emas. Sabab: MJPEG oqimi jimgina
+// to'xtaganda brauzer xato bermaydi — rasm qorayadi, JS esa bilmaydi va
+// eski ramkalarni chizaverardi. Bu yerda har kadr alohida so'rov, kelmasa
+// darhol ma'lum bo'ladi.
+async function frameLoop(branch, ch, gen){
+  const img=document.getElementById('bigimg');
+  let seq=-1;
+  while(bigCh===ch && frameGen===gen){
+    try{
+      const r=await fetch(`/frame/${encodeURIComponent(branch)}/${ch}?after=${seq}&big=1`);
+      if(r.status===204) continue;              // yangi kadr yo'q, yana so'raymiz
+      if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
+      seq=+r.headers.get('X-Seq');
+      const blob=await r.blob();
+      const url=URL.createObjectURL(blob);
+      img.src=url;
+      if(lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl=url;
+      lastFrameAt=Date.now();
+    }catch(e){ await new Promise(s=>setTimeout(s,400)); }
+  }
+}
 async function doScan(){
   const b=document.getElementById('scanbtn');
   b.disabled=true; b.textContent='Sanalyapti…';
@@ -329,24 +351,16 @@ function drawBoxes(boxes){
   }
 }
 function openBig(ch,name){
-  bigCh=ch; bigName=name; imgReady=false;
+  bigCh=ch; bigName=name; lastFrameAt=0;
   drawBoxes([]);          // eski kameraning ramkalari qolib ketmasin
-  const img=document.getElementById('bigimg');
-  // MJPEG da birinchi kadr kelguncha <img> bo'sh (qora) turadi. Ramkalarni
-  // shu paytda chizsak, qora fonda osilib qolgan ramkalar ko'rinadi —
-  // Sardor ko'rgan holat aynan shu edi.
-  img.onload=()=>{ imgReady=true; };
-  // Oqim uzilsa <img> qora qolib ketardi, ramkalar esa ustida turaverardi.
-  // Endi uzilganda qayta ulanadi va ramkalar tozalanadi.
-  img.onerror=()=>{ imgReady=false; drawBoxes([]);
-    if(bigCh===ch) setTimeout(()=>{ if(bigCh===ch) openBig(ch,name); }, 1000); };
-  img.src='/stream/'+encodeURIComponent(branch)+'/'+ch+'?big=1&t='+Date.now();
+  document.getElementById('bigimg').removeAttribute('src');
+  frameLoop(branch, ch, ++frameGen);
   document.getElementById('bigname').textContent=name;
   document.getElementById('big').classList.add('on');
 }
 function closeBig(){
-  bigCh=null; imgReady=false; drawBoxes([]);
-  document.getElementById('bigimg').src='';   // oqimni uzamiz, fokus bo'shaydi
+  bigCh=null; frameGen++; lastFrameAt=0; drawBoxes([]);
+  document.getElementById('bigimg').removeAttribute('src');
   document.getElementById('big').classList.remove('on');
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
@@ -391,10 +405,13 @@ async function tick(){
     if(c.channel===bigCh){
       document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
       document.getElementById('bigcount').textContent=c.count;
-      const fresh = imgReady && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
+      // Kadr kelmayotgan bo'lsa ramkalar ham ko'rsatilmaydi — qora ekran
+      // ustida osilib qolgan ramkalardan ko'ra bo'sh ekran halolroq.
+      const live = Date.now()-lastFrameAt < 1500;
+      const fresh = live && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
       drawBoxes(fresh ? (c.boxes||[]) : []);
       document.getElementById('bigage').textContent =
-        c.boxes_age==null ? '' : (fresh ? '' : `ramkalar ${c.boxes_age}s eski`);
+        live ? '' : 'kadr kelmayapti…';
     }
   }
   lastScan = s.scanned_ago;
@@ -477,6 +494,36 @@ def still(branch, channel):
         return "yo'q", 404
     return Response(cam.snapshot(), mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.get("/frame/<branch>/<channel>")
+def frame(branch, channel):
+    """Bitta YANGI kadrni kutib qaytaradi (long-poll).
+
+    Nega MJPEG emas: brauzer MJPEG oqimi jimgina to'xtaganda hech qanday
+    xato bermaydi — rasm qorayadi, JS esa buni bilmaydi va eski ramkalarni
+    chizishda davom etadi. Sardor ko'rgan "qora ekran + ramkalar" aynan shu.
+    Bu yerda esa har kadr alohida javob: kelmasa mijoz darhol biladi.
+
+    ?after=N — mijozdagi oxirgi kadr raqami. Undan yangisi chiqguncha
+    kutamiz (WAIT gacha), keyin qaytaramiz.
+    """
+    cam = nvr.find(branch, channel)
+    if cam is None:
+        return "yo'q", 404
+    after = request.args.get("after", type=int, default=-1)
+    if request.args.get("big") == "1":
+        cam.branch.set_focus(channel)
+    WAIT = 3.0
+    deadline = time.time() + WAIT
+    while cam.seq == after and time.time() < deadline:
+        time.sleep(0.02)
+    if cam.seq == after:
+        return Response(status=204)      # yangi kadr yo'q
+    with cam.lock:
+        data, seq = cam.jpeg, cam.seq
+    return Response(data or nvr.PLACEHOLDER, mimetype="image/jpeg",
+                    headers={"Cache-Control": "no-store", "X-Seq": str(seq)})
 
 
 @app.get("/stream/<branch>/<channel>")
