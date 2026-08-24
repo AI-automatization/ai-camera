@@ -73,8 +73,10 @@ CAMERAS = BRANCHES[BRANCH]["cameras"]
 # sanash uchun kerak, sekundiga bir marta yangilanishi shart emas.
 MAX_CONN = 6              # NVR ga bir vaqtda shuncha so'rov (3 fokus + fon)
 FOCUS_WORKERS = 3         # ochilgan kamerani shuncha oqim bilan tortamiz
-BG_INTERVAL = 12.0        # hech kim qaramayotganda (odam sanash uchun yetadi)
-BG_SLOW_INTERVAL = 25.0   # kimdir kamera ochganda fondagilar chekinadi
+# Odam sanash — asosiy funksiya, shuning uchun fon kameralari kamera ochilganda
+# ham SEKINLASHMAYDI. 15 kamera 10 sekundda = 1.5 so'rov/sek, budjet ~17 —
+# ochilgan kameraga qolgani yetib ortadi.
+BG_INTERVAL = 10.0
 FOCUS_TTL = 6.0           # brauzer jim qolsa fokus bekor bo'ladi
 
 _gate = threading.Semaphore(MAX_CONN)
@@ -95,8 +97,13 @@ def focused_channel():
 def get(sess, url):
     """NVR ga xavfsiz so'rov: ulanish limiti + qulflanishni sezish.
 
-    401 kelsa NVR akkauntni bloklagan bo'lishi mumkin — qayta urinish qulfni
-    faqat uzaytiradi, shuning uchun bir muddat butunlay to'xtaymiz.
+    401 kelsa NVR akkauntni bloklagan bo'ladi. Qayta urinish qulfni faqat
+    uzaytiradi, shuning uchun butunlay to'xtaymiz — va NVR ning O'ZIDAN
+    qulf qachon ochilishini so'raymiz.
+
+    Ilgari bu yerda qat'iy 60 sekund yozilgan edi. Bu xato: haqiqiy qulf
+    ~15-26 daqiqa bo'ladi (o'lchandi: unlockTime=1563), ya'ni 60 sekunddan
+    keyin 15 kamera yana urinib, qulfni qayta boshlatardi.
     """
     if time.time() < _locked_until[0]:
         return None
@@ -106,11 +113,33 @@ def get(sess, url):
         except Exception:
             return None
     if r.status_code == 401:
-        _locked_until[0] = time.time() + 60
+        note_lockout()
         return None
     if r.status_code == 200 and r.content[:2] == b"\xff\xd8":
         return r.content
     return None
+
+
+_lock_check = [0.0]
+
+
+def note_lockout():
+    """401 kelganda: NVR dan qulf muddatini so'rab, shungacha to'xtaymiz."""
+    now = time.time()
+    if now - _lock_check[0] < 30:      # tekshiruvning o'zi ham so'rov — kamdan-kam
+        _locked_until[0] = max(_locked_until[0], now + 60)
+        return
+    _lock_check[0] = now
+    left = lock_seconds_left()
+    _locked_until[0] = now + (left + 15 if left else 120)
+    if left:
+        print(f"[nvr] akkaunt qulflandi — {left} sekunddan keyin qayta urinamiz")
+
+
+def lock_state():
+    """(qulflanganmi, qolgan sekund) — dashboardda ko'rsatish uchun."""
+    left = _locked_until[0] - time.time()
+    return (left > 0, int(max(0, left)))
 
 
 def request_keyframe(sess, url):
@@ -219,7 +248,7 @@ class Camera:
                 continue
             if not self.fetch_once(sess):
                 self.online = False
-            time.sleep(BG_SLOW_INTERVAL if active else BG_INTERVAL)
+            time.sleep(BG_INTERVAL)
 
     def _publish(self, frame):
         with self.lock:

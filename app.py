@@ -147,25 +147,33 @@ PAGE = """
  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
    gap:16px;align-items:baseline;flex-wrap:wrap}
  h1{font-size:16px;margin:0;font-weight:600}
+ .total{font-size:14px} .total b{font-size:22px;margin-right:4px}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
  @media(max-width:900px){main{grid-template-columns:1fr}}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
  .cam{background:var(--card);border:1px solid var(--line);border-radius:8px;
-   overflow:hidden;position:relative}
- .cam img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#000}
- .cam .lbl{padding:7px 10px;display:flex;justify-content:space-between;gap:8px}
- .cam .zone{color:var(--dim);font-size:12px}
- .cam .meta2{padding:0 10px 8px;display:flex;justify-content:space-between;
-   font-size:11px;color:var(--dim)}
- .idok{color:#9fd89f} .idno{color:#c99}
+   overflow:hidden;cursor:pointer;transition:border-color .15s}
+ .cam:hover{border-color:#6b5b45}
+ .cam .shot{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;
+   background:#0b0908}
+ .cam .body{padding:8px 10px}
+ .cam .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+ .cam .nm{font-weight:600;font-size:13px}
+ .cam .zone{color:var(--dim);font-size:11px}
+ .cam .cnt{display:flex;align-items:baseline;gap:6px;margin-top:4px}
+ .cam .num{font-size:26px;font-weight:700;line-height:1}
+ .cam .num.zero{color:var(--dim);font-weight:400}
+ .cam .unit{color:var(--dim);font-size:12px}
+ .cam .idbadge{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:20px}
+ .idok{background:#2d4a2d;color:#9fd89f} .idno{background:#3a3230;color:#b9a89a}
+ .cam.off{opacity:.45}
  .cam.hit{outline:2px solid #d9534f}
- .cam img{cursor:pointer}
- #big{position:fixed;inset:0;background:#000c;display:none;z-index:9;
+ #big{position:fixed;inset:0;background:#000e;display:none;z-index:9;
    align-items:center;justify-content:center;flex-direction:column;gap:10px}
  #big.on{display:flex}
- #big img{max-width:94vw;max-height:82vh;border-radius:8px}
+ #big img{max-width:94vw;max-height:82vh;border-radius:8px;background:#000}
  #bigbar{color:var(--fg);display:flex;gap:18px;align-items:center;font-size:14px}
  #bigbar button{background:var(--card);color:var(--fg);border:1px solid var(--line);
    border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
@@ -182,6 +190,7 @@ PAGE = """
 </style>
 <header>
   <h1>MARS audit kamerasi</h1>
+  <span class=total><b id=total>0</b> odam</span>
   <span class=dim id=meta>yuklanmoqda…</span>
 </header>
 <div id=big><img id=bigimg><div id=bigbar>
@@ -201,12 +210,15 @@ function build(cams){
   grid.innerHTML='';
   for(const c of cams){
     const d=document.createElement('div'); d.className='cam'; d.id='c'+c.channel;
-    d.innerHTML=`<img src="/stream/${c.channel}">
-      <div class=lbl><span>${c.name}</span>
-      <span class=zone>${c.zone||''}</span></div>
-      <div class=meta2><span>${c.count} odam</span>
-      <span class="${c.identity?'idok':'idno'}">${c.identity?"yuz aniq":"yuz kichik"}</span></div>`;
-    d.querySelector('img').onclick=()=>openBig(c.channel,c.name);
+    d.innerHTML=`<img class=shot id="s${c.channel}">
+      <div class=body>
+        <div class=top><span class=nm>${c.name}</span>
+          <span class=zone>${c.zone||''}</span></div>
+        <div class=cnt><span class=num id="n${c.channel}">0</span>
+          <span class=unit>odam</span>
+          <span class="idbadge idno" id="b${c.channel}">—</span></div>
+      </div>`;
+    d.onclick=()=>openBig(c.channel,c.name);
     grid.appendChild(d);
   }
   built=true;
@@ -227,12 +239,27 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 async function tick(){
   const s=await (await fetch('/state')).json();
   if(!built) build(s.cameras);
+  const total=s.cameras.reduce((a,c)=>a+c.count,0);
+  document.getElementById('total').textContent=total;
   document.getElementById('meta').textContent =
+    (s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa qoldi · ` : '') +
     `${s.branch} · ${s.online}/${s.cameras.length} kamera · `+
     `${s.rules} qoida · ${s.detectors} detektor`;
+  document.getElementById('meta').style.color = s.locked ? '#e08a8a' : '';
   for(const c of s.cameras){
     const el=document.getElementById('c'+c.channel);
-    if(el) el.classList.toggle('hit', c.hit);
+    if(!el) continue;
+    el.classList.toggle('hit', c.hit);
+    el.classList.toggle('off', !c.online);
+    const n=document.getElementById('n'+c.channel);
+    n.textContent=c.count; n.classList.toggle('zero', c.count===0);
+    const b=document.getElementById('b'+c.channel);
+    b.textContent=c.identity?'yuz aniq':'yuz kichik';
+    b.className='idbadge '+(c.identity?'idok':'idno');
+    // Katta ko'rinish ochiq bo'lsa grid kadrlarini so'ramaymiz — butun
+    // tezlik budjeti ochilgan kameraga ketsin.
+    if(bigCh===null)
+      document.getElementById('s'+c.channel).src='/still/'+c.channel+'?t='+Date.now();
     if(c.channel===bigCh)
       document.getElementById('bigfps').textContent=c.fps+' kadr/sek';
   }
@@ -274,8 +301,10 @@ def state():
             "hit": ch in hits,
         })
     done, _ = detectors.status()
+    locked, left = nvr.lock_state()
     return jsonify(branch=nvr.BRANCH, cameras=cams, events=events,
                    online=sum(1 for c in cams if c["online"]),
+                   locked=locked, lock_left=left,
                    rules=len(rules.load()), detectors=len(done))
 
 
@@ -283,6 +312,22 @@ def state():
 def focus(channel):
     nvr.focus(channel)
     return jsonify(ok=True)
+
+
+@app.get("/still/<channel>")
+def still(channel):
+    """Bitta kadr. Grid shuni ishlatadi — oqim EMAS.
+
+    Ilgari grid 15 ta MJPEG oqimini bir vaqtda ochardi. Har oqim Flask ipini
+    doimiy band qilib, server bo'g'ilib qolardi: skrinshotda hamma kamera
+    qop-qora edi va /state hammasini "offline" deb ko'rsatardi. Bitta kadr
+    so'rovi ulanishni ushlab turmaydi.
+    """
+    cam = CAMERAS.get(channel)
+    if cam is None:
+        return "yo'q", 404
+    return Response(cam.snapshot(), mimetype="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/stream/<channel>")
