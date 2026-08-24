@@ -145,7 +145,8 @@ def analyzer():
                   "y": round(100 * f["box"][1] / h, 2),
                   "w": round(100 * f["box"][2] / w, 2),
                   "h": round(100 * f["box"][3] / h, 2),
-                  "label": f["name"] or "?", "kind": "face" if f["name"] else "unknown"}
+                  "label": f["name"] or ("kichik" if f.get("too_small") else "?"),
+                  "kind": "face" if f["name"] else "unknown"}
                  for f in found]
         boxes += [{"x": round(100 * p["box"][0] / w, 2),
                    "y": round(100 * p["box"][1] / h, 2),

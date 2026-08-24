@@ -38,8 +38,17 @@ KP_CONF = 0.30          # nuqta ishonchi shundan past bo'lsa hisobga olinmaydi
 # qolgan edi).
 #   SANASH  — bu odammi? (yumshoqroq: stolga yashiringan odam ham odam)
 #   HOLAT   — o'tirganmi / boshi pastdami? (qattiq: nuqtalar aniq bo'lsin)
-COUNT_SHOULDER_MIN = 0.85   # sanash uchun yelka ishonchi (nuqta, quti emas)
-COUNT_KP_MIN = 8            # va kamida shuncha ishonchli nuqta
+# Sanash mezoni IKKI BOSQICHLI. Yagona "8 ta nuqta" sharti yarim to'silgan
+# odamni tashlab yuborardi: B4 da stolga engashgan odamning yelkasi 0.97,
+# quti bali 0.74 edi — lekin oyoqlari stol ostida qolgani uchun atigi 7 ta
+# nuqtasi ko'rinardi.
+#
+# Yelka ishonchi eng kuchli dalil, shuning uchun u yuqori bo'lsa kamroq
+# nuqta yetadi:
+COUNT_SHOULDER_STRONG = 0.90   # yelka shundan yuqori bo'lsa
+COUNT_KP_IF_STRONG = 6         # shuncha nuqta yetadi
+COUNT_SHOULDER_MIN = 0.85      # yelka bundan past bo'lsa umuman sanalmaydi
+COUNT_KP_MIN = 9               # oraliqdagi yelkada esa ko'proq nuqta kerak
 POSTURE_SHOULDER_MIN = 0.80  # holat o'qish uchun
 POSTURE_KP_MIN = 6
 PERSON_MIN_H = 45       # bundan kichik odamda nuqtalar ishonchsiz
@@ -54,6 +63,15 @@ DUP_NECK = 0.30         # yoki bo'yin nuqtalari bo'yning shuncha ulushida yaqin
 # bitta turgan odamga (415,116)-(454,224) va (387,149)-(451,320) qutilari
 # tushdi, IoU atigi 0.22 — lekin kichigining 64% i kattasining ichida edi.
 DUP_INSIDE = 0.60
+# Model bitta odamni yuqori va pastki qismga BO'LIB yuborishi mumkin (A1 da
+# stolda o'tirgan odamda shunday bo'ldi). Bunday parchani quti o'lchovlari
+# bilan ajratib bo'lmaydi: ikki xil odam (IoU 0.28, ichida 0.51) va bitta
+# odamning ikki parchasi (IoU 0.30, ichida 0.47) raqamda deyarli bir xil.
+#
+# Ajratuvchi belgi — YUZ. Har odamda bitta yuz bor. Parchada burun ham,
+# ko'z ham chiqmaydi (o'lchandi: butun qismda burun+ko'z, parchada faqat
+# quloq), ikki haqiqiy odamda esa ikkalasida ham yuz nuqtasi bor.
+FRAGMENT_INSIDE = 0.40  # shundan ko'p ustma-ust tushsa yuz bo'yicha tekshiramiz
 
 # COCO-17 nuqta indekslari
 NOSE = 0
@@ -119,6 +137,12 @@ def _iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
+def _face_points(k):
+    """Yuz nuqtalari soni (burun, ko'zlar). Quloq hisobga olinmaydi —
+    u parchada ham chiqib qoladi."""
+    return sum(1 for i in (NOSE, 1, 2) if k[i][2] >= 0.5)
+
+
 def _inside(a, b):
     """Kichik quti kattasining qancha qismi ichida (0..1)."""
     x1, y1 = max(a[0], b[0]), max(a[1], b[1])
@@ -141,7 +165,16 @@ def _dedupe(cands):
             if _iou(c["box"], k["box"]) >= DUP_IOU:
                 dup = True
                 break
-            if _inside(c["box"], k["box"]) >= DUP_INSIDE:
+            inside = _inside(c["box"], k["box"])
+            if inside >= DUP_INSIDE:
+                dup = True
+                break
+            # Tana parchasimi: ustma-ust tushgan, lekin yuzi yo'q.
+            # Orqasi bilan turgan YOLG'IZ odam bundan zarar ko'rmaydi —
+            # u hech kim bilan ustma-ust tushmaydi.
+            if (inside >= FRAGMENT_INSIDE
+                    and _face_points(c["keypoints"]) == 0
+                    and _face_points(k["keypoints"]) > 0):
                 dup = True
                 break
             if c["neck"] and k["neck"]:
@@ -179,7 +212,11 @@ def people(res):
         # mumkin, yolg'iz nuqta soni esa soyada.
         if h < PERSON_MIN_H:
             continue
-        if shoulder < COUNT_SHOULDER_MIN or strong < COUNT_KP_MIN:
+        if shoulder < COUNT_SHOULDER_MIN:
+            continue
+        need = (COUNT_KP_IF_STRONG if shoulder >= COUNT_SHOULDER_STRONG
+                else COUNT_KP_MIN)
+        if strong < need:
             continue
 
         # Kadr chetida kesilgan odamning qutisi haqiqiy tana chegarasi emas —

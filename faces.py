@@ -31,6 +31,15 @@ META_DB = os.path.join(DATA_DIR, "meta.json")
 # chunki noto'g'ri odamga jarima qo'yish yo'q signaldan qimmatroq.
 THRESHOLD = 0.40
 DET_SIZE = (320, 320)
+# SFace 112x112 kirish bilan ishlaydi. Bundan ancha kichik yuzni
+# kattalashtirish yangi ma'lumot qo'shmaydi — ball shovqinga aylanadi.
+# Jonli o'lchandi (Yunusobod, 2026-08-24): 13-41 piksellik yuzlar
+# 0.21-0.30 ball berdi, ya'ni tanish emas, tasodif. Bunday yuzga ism
+# qo'yish — noto'g'ri ism qo'yish demakdir.
+#
+# Shuning uchun kichik yuzda tanishga URINILMAYDI ham: ism ham berilmaydi,
+# qimmat hisob (~138 ms) ham bekorga sarflanmaydi.
+MIN_RECOGNIZE_PX = 60
 
 _det = _rec = None
 _lock = threading.Lock()
@@ -109,6 +118,12 @@ def identify(frame, branch=None):
     known = known_faces(branch)
     out = []
     for f in faces:
+        box = (int(f[0]), int(f[1]), int(f[2]), int(f[3]))
+        if box[2] < MIN_RECOGNIZE_PX:
+            # Yuz topildi, lekin kim ekanini aytib bo'lmaydi
+            out.append({"box": box, "name": None, "score": None,
+                        "too_small": True})
+            continue
         aligned = rec.alignCrop(frame, f)
         emb = _unit(rec.feature(aligned).flatten())
         best, score = None, -1.0
@@ -117,9 +132,10 @@ def identify(frame, branch=None):
             if s > score:
                 best, score = name, s
         out.append({
-            "box": (int(f[0]), int(f[1]), int(f[2]), int(f[3])),
+            "box": box,
             "name": best if score >= THRESHOLD else None,
             "score": round(score, 3),
+            "too_small": False,
         })
     return out
 
@@ -131,7 +147,12 @@ def annotate(frame, people):
         named = p["name"] is not None
         color = (0, 200, 0) if named else (0, 165, 255)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        label = f"{p['name']} {p['score']:.2f}" if named else f"? {p['score']:.2f}"
+        if named:
+            label = f"{p['name']} {p['score']:.2f}"
+        elif p.get("too_small"):
+            label = "yuz kichik"          # tanishga urinilmadi
+        else:
+            label = f"? {p['score']:.2f}"
         cv2.putText(frame, label, (x, max(18, y - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     return frame
