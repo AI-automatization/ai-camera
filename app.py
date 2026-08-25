@@ -254,8 +254,9 @@ PAGE = """
  #peoplebtn,#attbtn{background:var(--card);color:var(--fg);
    border:1px solid var(--line);
    border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
- #att{position:fixed;top:0;right:0;bottom:0;width:430px;background:var(--card);
-   border-left:1px solid var(--line);padding:16px;overflow:auto;display:none;z-index:8}
+ #att{position:fixed;top:0;right:0;bottom:0;width:460px;background:var(--card);
+   border-left:1px solid var(--line);padding:18px;overflow:auto;display:none;z-index:9;
+   box-shadow:-8px 0 24px #0007}
  #att.on{display:block}
  #att h2{font-size:15px;margin:0 0 4px}
  #att select{background:#14110e;color:var(--fg);border:1px solid var(--line);
@@ -266,8 +267,9 @@ PAGE = """
  #att td{padding:7px 4px;border-bottom:1px solid var(--line)}
  #att td.t{font-variant-numeric:tabular-nums}
  #att .cam{color:var(--dim);font-size:11px}
- #people{position:fixed;top:0;right:0;bottom:0;width:380px;background:var(--card);
-   border-left:1px solid var(--line);padding:16px;overflow:auto;display:none;z-index:8}
+ #people{position:fixed;top:0;right:0;bottom:0;width:400px;background:var(--card);
+   border-left:1px solid var(--line);padding:18px;overflow:auto;display:none;z-index:9;
+   box-shadow:-8px 0 24px #0007}
  #people.on{display:block}
  #people h2{font-size:15px;margin:0 0 4px}
  #people .hint{color:var(--dim);font-size:12px;margin-bottom:12px;line-height:1.5}
@@ -295,8 +297,13 @@ PAGE = """
  .prow .n{flex:1} .prow .s{color:var(--dim);font-size:12px}
  .prow button{padding:3px 9px;font-size:12px;background:transparent;
    border:1px solid var(--line);color:var(--dim)}
- .warn{margin-top:8px;padding:7px 10px;border-radius:6px;font-size:12px;
-   background:#3a2d2a;color:#e0b3a8;line-height:1.4}
+ .warn{margin-top:12px;padding:0;border-radius:6px;font-size:12px;
+   background:#3a2d2a;color:#e0b3a8;line-height:1.6}
+ .warn summary{padding:9px 12px;cursor:pointer;font-weight:600;list-style:none}
+ .warn summary::-webkit-details-marker{display:none}
+ .warn[open] summary{border-bottom:1px solid #52403c}
+ .warn details>*:not(summary){padding:0 12px}
+ .warn>summary+*{padding:10px 12px}
  .dim{color:var(--dim);font-size:13px}
  main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
    align-items:start}
@@ -366,7 +373,7 @@ PAGE = """
     kirish/coworking kameralari oldidan o'tganda qayd etiladi.</div>
   <select id=attdate onchange="loadAtt()"></select>
   <div id=atttable></div>
-  <div class=row><button onclick="toggleAtt()">Yopish</button></div>
+  <div class=row><button onclick="closePanels()">Yopish</button></div>
 </aside>
 <aside id=people>
   <h2>Xodimlar</h2>
@@ -382,7 +389,7 @@ PAGE = """
   <div id=bar><i></i></div>
   <div class=row>
     <button class=go id=addbtn onclick="addFace()">Yuzni olish</button>
-    <button onclick="togglePeople()">Yopish</button>
+    <button onclick="closePanels()">Yopish</button>
   </div>
   <div id=msg></div>
   <div id=pwarn></div>
@@ -496,8 +503,9 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
 let lastScan=-1;
 function toggleAtt(){
   const p=document.getElementById("att");
-  p.classList.toggle("on");
-  if(p.classList.contains("on")) loadAtt();
+  const opening=!p.classList.contains("on");
+  closePanels();                 // ikkinchi panel ochiq bo'lsa yopamiz
+  if(opening){ p.classList.add("on"); loadAtt(); }
 }
 async function loadAtt(){
   const sel=document.getElementById("attdate");
@@ -521,9 +529,14 @@ async function loadAtt(){
 }
 function togglePeople(){
   const p=document.getElementById("people");
-  p.classList.toggle("on");
-  if(p.classList.contains("on")) loadPeople();
-  else closeCam();          // panel yopilsa kamera ham o'chsin
+  const opening=!p.classList.contains("on");
+  closePanels();
+  if(opening){ p.classList.add("on"); loadPeople(); }
+}
+function closePanels(){
+  document.getElementById("att").classList.remove("on");
+  document.getElementById("people").classList.remove("on");
+  closeCam();               // yopilganda kamera ham o'chsin
 }
 async function loadSources(){
   const sel=document.getElementById("psrc");
@@ -540,11 +553,14 @@ async function loadSources(){
 async function loadPeople(){
   loadSources();
   const d=await (await fetch('/faces')).json();
-  const warn=d.problems.map(p=> p.type==="duplicate"
-      ? `<div class=warn>${p.a} va ${p.b} bir-biriga o'xshaydi (${p.score}) — bir odam ikki ismdami?</div>`
-      : `<div class=warn>${p.name}: ${p.samples} namuna aralashgan (${p.worst}) — boshqa odamning yuzi tushgan bo'lishi mumkin</div>`
-    ).join("");
-  document.getElementById('pwarn').innerHTML=warn;
+  // Ogohlantirishlar yig'ilgan holda — hammasini ochib tashlamaymiz
+  const box=document.getElementById('pwarn');
+  if(d.problems.length){
+    const items=d.problems.map(p=> p.type==="duplicate"
+      ? `${p.a} va ${p.b} — bir odammi? (${p.score})`
+      : `${p.name}: namunalar aralashgan (${p.samples} ta)`).join("<br>");
+    box.innerHTML=`<details class=warn><summary>${d.problems.length} ta muammo — bazani tekshiring</summary>${items}</details>`;
+  } else box.innerHTML="";
   document.getElementById('plist').innerHTML = d.people.map(p=>`
     <div class=prow><span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
@@ -753,7 +769,8 @@ def index():
 @app.get("/state")
 def state():
     """Bitta filial holati. ?branch=Nomi — qaysi filial (birinchisi standart)."""
-    name = request.args.get("branch") or (nvr.ENABLED[0] if nvr.ENABLED else "")
+    name = (request.args.get("branch")
+            or (nvr.ENABLED[0] if nvr.ENABLED else next(iter(nvr.BRANCHES), "")))
     br = nvr.BRANCHES.get(name)
     with _events_lock:
         events = [e for e in EVENTS if e.get("branch") == name][:20]
@@ -808,8 +825,6 @@ def still(branch, channel):
     cam = nvr.find(branch, channel)
     if cam is None:
         return "yo'q", 404
-    if hasattr(cam.branch, "want"):
-        cam.branch.want()      # Mac kamerasi: so'ralganda yoqiladi
     return Response(cam.snapshot(), mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
 

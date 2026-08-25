@@ -456,7 +456,12 @@ def build():
     for name in ENABLED:
         BRANCHES[name] = Branch(name, BRANCH_HOSTS[name], BRANCH_CAMERAS[name])
     if os.environ.get("MAC_CAMERA_OFF") != "1":
-        BRANCHES["Mac"] = LocalBranch()
+        mac = LocalBranch()
+        # ATTENDANCE_MODE=1 bo'lsa kamera doim yoqiq (davomat brauzersiz ham
+        # yozilsin). Aks holda on-demand: faqat ochilganda yoqiladi, 8s tinch
+        # tursa o'chadi — chiroq bekorga yonmaydi.
+        mac.always_on = os.environ.get("ATTENDANCE_MODE") == "1"
+        BRANCHES["Mac"] = mac
     for br in BRANCHES.values():
         br.start()
     return BRANCHES
@@ -527,8 +532,8 @@ class LocalCamera:
                 if cap is not None:
                     cap.release()
                     cap = None
-                    self.online = False
                     print(f"[{self.branch.name}] kamera o'chirildi")
+                self.online = False        # yoqilmagan = offline
                 time.sleep(0.3)
                 continue
 
@@ -588,7 +593,7 @@ class LocalCamera:
 
     def wanted(self):
         """Kamera hozir kerakmi — filial ochilgan yoki yaqinda so'ralgan."""
-        return time.time() < self.branch.wanted_until
+        return self.branch.always_on or time.time() < self.branch.wanted_until
 
     def fetch_once(self, sess=None):
         return self.SAME       # o'zi oladi, skaner tegmasin
@@ -600,6 +605,11 @@ class LocalBranch:
     local = True         # kompyuterdagi kamera: budjet cheklovi yo'q,
                          # shuning uchun grid'da ham jonli ko'rsatiladi
     IDLE_OFF = 8.0       # so'ralmasa shuncha sekunddan keyin o'chadi
+
+    # DAVOMAT rejimida (faqat Mac, NVR yo'q) kamera DOIM yoqiq turadi:
+    # davomat brauzer ochiq bo'lmasa ham yozilishi kerak, shuning uchun
+    # idle-off ishlamaydi.
+    always_on = False
 
     def __init__(self, name="Mac"):
         self.name = name
