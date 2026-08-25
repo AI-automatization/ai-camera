@@ -42,7 +42,7 @@ ANALYZE_INTERVAL = 5.0      # fon kamerasi: grid muzlatilgan, sanoq "Sanash"
 #
 # Narx o'lchandi: pose + odam-detektori birga 117 ms. Ya'ni 0.5 sekundda
 # bir marta ~23% yuk — kadr yetkazishga sezilarli ta'sir qilmaydi.
-FOCUS_ANALYZE_INTERVAL = 0.5
+FOCUS_ANALYZE_INTERVAL = 0.3
 
 app = Flask(__name__)
 
@@ -358,6 +358,7 @@ PAGE = r"""
  .prow button{padding:4px 11px;font-size:12px;background:transparent;
    border:1px solid var(--line);color:var(--dim);border-radius:6px;cursor:pointer}
  .prow button:hover{border-color:#a05a5a;color:#e0a8a8}
+ .prow button.armed{background:#4a2d2d;border-color:#a05a5a;color:#efa0a0}
  .warn{margin-bottom:14px;border-radius:8px;font-size:13px;
    background:#3a2d2a;color:#e0b3a8}
  .warn summary{padding:11px 14px;cursor:pointer;font-weight:600;list-style:none}
@@ -504,6 +505,13 @@ async function frameLoop(br, ch, gen){
       const url=URL.createObjectURL(await r.blob());
       img.src=url; if(lastUrl) URL.revokeObjectURL(lastUrl);
       lastUrl=url; lastFrameAt=Date.now();
+      // Ramkalarni KADR BILAN BIRGA chizamiz — tick (3s) ni kutmaymiz.
+      try{
+        const m=JSON.parse(r.headers.get("X-Meta")||"{}");
+        const fresh=m.age!=null && m.age<=BOX_MAX_AGE;
+        drawBoxes(fresh ? (m.boxes||[]) : []);
+        document.getElementById("bigcount").textContent=m.count||0;
+      }catch(e){}
     }catch(e){ await new Promise(s=>setTimeout(s,400)); }
   }
 }
@@ -577,10 +585,11 @@ async function loadPeople(){
       : `${p.name}: namunalar aralashgan (${p.samples} ta)`).join("<br>");
     box.innerHTML=`<details class=warn><summary>${d.problems.length} ta muammo — bazani tekshiring</summary><div>${items}</div></details>`;
   } else box.innerHTML="";
-  document.getElementById("plist").innerHTML = d.people.map(p=>`
+  document.getElementById("plist").innerHTML = d.people.map((p,i)=>`
     <div class=prow><span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
-      <button onclick="delFace('${p.name.replace(/'/g,"\\'")}')">O'chirish</button>
+      <button class=del data-name="${p.name.replace(/"/g,"&quot;")}"
+        onclick="askDel(this)">O'chirish</button>
     </div>`).join("") || "<div class=empty>Bazada xodim yo'q</div>";
 }
 function say(t,ok){ const m=document.getElementById("msg");
@@ -680,10 +689,22 @@ async function addFaceFromNvr(name, src){
   document.getElementById("pname").value = saved ? "" : name;
   loadPeople();
 }
+let delArmed=null, delTimer=null;
+function askDel(btn){
+  const name=btn.dataset.name;
+  if(delArmed===name){                    // ikkinchi bosish — o'chiramiz
+    clearTimeout(delTimer); delArmed=null;
+    delFace(name); return;
+  }
+  // birinchi bosish — tasdiq so'raymiz
+  document.querySelectorAll(".del").forEach(resetDel);
+  delArmed=name; btn.textContent="Tasdiqlang?"; btn.classList.add("armed");
+  delTimer=setTimeout(()=>{ resetDel(btn); delArmed=null; }, 3000);
+}
+function resetDel(btn){ btn.textContent="O'chirish"; btn.classList.remove("armed"); }
 async function delFace(name){
-  if(!confirm(name+" o'chirilsinmi?")) return;
   const d=await (await fetch("/faces/"+encodeURIComponent(name),{method:"DELETE"})).json();
-  say(d.message, d.ok); loadPeople();
+  loadPeople();
 }
 // ── har 3 sekundda holat ──
 async function tick(){
@@ -718,11 +739,9 @@ async function tick(){
         "/still/"+encodeURIComponent(branch)+"/"+c.channel+"?t="+Date.now();
     if(c.channel===bigCh){
       document.getElementById("bigfps").textContent=c.fps+" kadr/sek";
-      document.getElementById("bigcount").textContent=c.count;
       const live=Date.now()-lastFrameAt<1500;
-      const fresh=live && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
-      drawBoxes(fresh ? (c.boxes||[]) : []);
       document.getElementById("bigage").textContent=live?"":"kadr kelmayapti…";
+      if(!live) drawBoxes([]);        // kadr kelmasa ramka ham yo'q
     }
   }
   lastScan=s.scanned_ago;
@@ -923,8 +942,14 @@ def frame(branch, channel):
         return Response(status=204)      # yangi kadr yo'q
     with cam.lock:
         data, seq = cam.jpeg, cam.seq
+        st = dict(cam.state)
+    import json as _json
+    meta = _json.dumps({"boxes": st.get("boxes", []),
+                        "count": st.get("count", 0),
+                        "age": round(time.time() - st["at"], 1) if st.get("at") else None})
     return Response(data or nvr.PLACEHOLDER, mimetype="image/jpeg",
-                    headers={"Cache-Control": "no-store", "X-Seq": str(seq)})
+                    headers={"Cache-Control": "no-store", "X-Seq": str(seq),
+                             "X-Meta": meta})
 
 
 @app.get("/stream/<branch>/<channel>")

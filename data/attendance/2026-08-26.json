@@ -1,10 +1,10 @@
 {
  "Sardor Madaliev": {
   "first": "00:23:05",
-  "last": "00:34:15",
+  "last": "00:49:46",
   "first_cam": "Mac/Mac kamera",
   "last_cam": "Mac/Mac kamera",
-  "seen": 88
+  "seen": 456
  },
  "kimdur": {
   "first": "00:23:30",
@@ -22,7 +22,21 @@
  },
  "Test": {
   "first": "00:44:37",
-  "last": "00:44:37",
+  "last": "00:44:50",
+  "first_cam": "Mac/Mac kamera",
+  "last_cam": "Mac/Mac kamera",
+  "seen": 23
+ },
+ "Suhrob": {
+  "first": "00:47:02",
+  "last": "00:47:02",
+  "first_cam": "Mac/Mac kamera",
+  "last_cam": "Mac/Mac kamera",
+  "seen": 1
+ },
+ "Akrom": {
+  "first": "00:47:03",
+  "last": "00:47:03",
   "first_cam": "Mac/Mac kamera",
   "last_cam": "Mac/Mac kamera",
   "seen": 1
