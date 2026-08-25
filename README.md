@@ -29,8 +29,13 @@ BRANCHES="Chilonzor" ./venv/bin/python app.py
 ```
 
 Har filialning o'z NVR si, o'z tezlik budjeti va o'z qulfi bor — biri
-qulflansa ikkinchisi ishlayveradi. Oybek (`oybek.marsits.uz:8080`) ofis
-tarmog'idan ochilmaydi.
+qulflansa ikkinchisi ishlayveradi. Yunusobod va Chilonzor lokal tarmoqda,
+Minor tashqi manzilda (`89.249.60.238:8080`, NAT). Oybek ofis tarmog'idan
+ochilmaydi.
+
+Minor NAT orqali kameralarni proksi qiladi, shuning uchun snapshot yo'li
+boshqacha (`StreamingProxy`) — bu `nvr.SNAPSHOT_PATH` da filialga qarab
+tanlanadi. Parol ham filialga xos bo'lishi mumkin (`nvr.BRANCH_PASS`).
 
 **Mac kamerasi** ham filial sifatida qo'shilgan (`Mac`). U yuz tanishni
 sinash uchun: NVR kameralarida yuz 13-41 piksel bo'ladi va tanib bo'lmaydi,

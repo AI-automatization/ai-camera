@@ -57,6 +57,9 @@ ZONES = {
     # Mac kamerasi — yuz tanishni sinash uchun. Zonasi yo'q, ya'ni joyga
     # bog'liq qoidalar (3.8 administratsiya, 3.11 coworking) unga tegmaydi.
     "Mac": {"0": None},
+    # Minor: kamera qayerga qaraganini bilmaymiz — zona qo'yilmagan, joyga
+    # bog'liq qoidalar tegmaydi. Aniqlangach shu yerga yoziladi.
+    "Minor": {f"{i}01": None for i in range(1, 9)},
     "Chilonzor": {
         "101": CLASSROOM, "201": CLASSROOM, "301": CLASSROOM, "401": CLASSROOM,
         "501": CLASSROOM, "601": KITCHEN, "701": CLASSROOM, "801": CLASSROOM,

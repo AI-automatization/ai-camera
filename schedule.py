@@ -37,6 +37,7 @@ _cache = {"at": 0.0, "groups": None}
 _lock = threading.Lock()
 
 # Filial nomi -> Mars branch_id. Kamera filiali (nvr.BRANCHES) bilan bog'lash uchun.
+# Minor uchun Mars branch_id topilsa qo'shiladi (jadval uchun). Hozircha yo'q.
 BRANCH_IDS = {"Yunusobod": 2, "Chilonzor": 4, "Oybek": 17}
 
 # Xona nomi kamera nomiga tushmasa shu yerda tuzatiladi.

@@ -50,9 +50,21 @@ PASSWORD = os.environ.get("NVR_PASS", "0perator1audit")
 BRANCH_HOSTS = {
     "Yunusobod": "192.168.90.251",
     "Chilonzor": "192.168.68.251",
+    "Minor": "89.249.60.238:8080",       # tashqi (NAT), HTTP porti 8080
     # Oybek tashqi manzilda va ofis tarmog'idan ochilmaydi (sinaldi: 8080 yopiq).
     "Oybek": "oybek.marsits.uz:8080",
 }
+
+# Snapshot URL naqshi filialga qarab farq qiladi. Lokal NVR'lar to'g'ridan-
+# to'g'ri kamera oqimini beradi (Streaming/channels), Minor esa NAT orqali
+# ulangan kameralarni proksi qiladi (StreamingProxy). {ch} kanal raqami.
+SNAPSHOT_PATH = {
+    "Minor": "/ISAPI/ContentMgmt/StreamingProxy/channels/{ch}/picture",
+}
+DEFAULT_SNAPSHOT = "/ISAPI/Streaming/channels/{ch}/picture"
+
+# Filialga xos parol (ba'zi NVR'larda boshqa). Minor eski parolda ekan.
+BRANCH_PASS = {}
 
 BRANCH_CAMERAS = {
     "Yunusobod": {
@@ -69,11 +81,15 @@ BRANCH_CAMERAS = {
         "1501": "Co-Working (3)", "1601": "Kassa",
     },
     "Oybek": {"101": "Kirish", "201": "Zal", "401": "Koridor", "501": "Xona"},
+    # Minor NVR nomlari sozlanmagan (hammasi "Camera 01") — kanal raqami bilan
+    "Minor": {"101": "Kamera 1", "201": "Kamera 2", "301": "Kamera 3",
+              "401": "Kamera 4", "501": "Kamera 5", "601": "Kamera 6",
+              "701": "Kamera 7", "801": "Kamera 8"},
 }
 
 # Qaysi filiallar ishga tushadi. Vergul bilan: BRANCHES="Yunusobod,Chilonzor"
 ENABLED = [b.strip() for b in
-           os.environ.get("BRANCHES", "Yunusobod,Chilonzor").split(",")
+           os.environ.get("BRANCHES", "Yunusobod,Chilonzor,Minor").split(",")
            if b.strip() in BRANCH_HOSTS]
 
 # NVR ba'zan javob bermay qoladi: 60 sekundlik o'lchovda 2.24, 2.07 va 1.05
@@ -133,6 +149,7 @@ class Branch:
     def __init__(self, name, host, cameras):
         self.name = name
         self.host = host
+        self.password = BRANCH_PASS.get(name, PASSWORD)
         self.gate = threading.Semaphore(MAX_CONN)
         self.locked_until = 0.0
         self._lock_checked = 0.0
@@ -153,7 +170,7 @@ class Branch:
         """NVR qulfi qolgan vaqti (sekund). Qulf bo'lmasa 0."""
         try:
             r = requests.get(f"http://{self.host}/ISAPI/Security/userCheck",
-                             auth=HTTPDigestAuth(USER, PASSWORD), timeout=6)
+                             auth=HTTPDigestAuth(USER, self.password), timeout=6)
             if "<lockStatus>lock</lockStatus>" in r.text:
                 m = re.search(r"<unlockTime>(\d+)</unlockTime>", r.text)
                 return int(m.group(1)) if m else 60
@@ -192,7 +209,7 @@ class Branch:
         """
         try:
             requests.get(f"http://{self.host}/ISAPI/System/deviceInfo",
-                         auth=HTTPDigestAuth(USER, PASSWORD),
+                         auth=HTTPDigestAuth(USER, self.password),
                          timeout=REACH_TIMEOUT)
             self.reachable = True
         except Exception:
@@ -222,7 +239,7 @@ class Branch:
         muhimroq.
         """
         sess = requests.Session()
-        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        sess.auth = HTTPDigestAuth(USER, self.password)
         while True:
             if not self._scan_wanted.wait(timeout=1.0):
                 continue
@@ -254,7 +271,7 @@ class Branch:
         navbatlashib bir-birini kutadi (2.88 -> 2.25 yangi kadr/sek).
         """
         sess = requests.Session()
-        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        sess.auth = HTTPDigestAuth(USER, self.password)
         while True:
             ch = self.focused_channel()
             if not ch or time.time() < self.locked_until or self.reachable is False:
@@ -291,7 +308,7 @@ class Branch:
         15 dan 9 kadr/sekka tushirardi (o'lchandi).
         """
         sess = requests.Session()
-        sess.auth = HTTPDigestAuth(USER, PASSWORD)
+        sess.auth = HTTPDigestAuth(USER, self.password)
         while True:
             ch = self.focused_channel()
             cam = self.cameras.get(ch) if ch else None
@@ -357,8 +374,9 @@ class Camera:
 
     @property
     def url(self):
-        return (f"http://{self.branch.host}/ISAPI/Streaming/channels/{self.channel}"
-                f"/picture?videoResolutionWidth=1920&videoResolutionHeight=1080")
+        path = SNAPSHOT_PATH.get(self.branch.name, DEFAULT_SNAPSHOT)
+        base = f"http://{self.branch.host}" + path.format(ch=self.channel)
+        return base + "?videoResolutionWidth=1920&videoResolutionHeight=1080"
 
     # fetch_once natijasi. "same" ni "fail" dan ajratish SHART: dublikat
     # kelishi kamera ishlayotganini bildiradi, uni offline deb belgilash xato.
