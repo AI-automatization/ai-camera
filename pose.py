@@ -30,6 +30,12 @@ MODEL = "yolov8s-pose.pt"
 # detektor qolganini. Natijada B2 da 12 -> 13 (haqiqiy son).
 DETECT_MODEL = "yolov8m.pt"
 DETECT_CONF = 0.35      # pastroqda soxta topilma ko'payadi (0.25 da 16 ta chiqdi)
+# Detektor pose TOPMAGAN odamni qo'shadi — lekin u faqat SHAKLGA qaraydi va
+# ba'zan bank/idish/stulni odam deb topadi (o'lchandi: oshxonada silindr
+# bankka 1-raqam berdi). Pose bunday xato qilmaydi (bo'g'im kerak). Shuning
+# uchun detektor YOLG'IZ qo'shadigan topilma qattiqroq tekshiriladi:
+DETECT_ADD_CONF = 0.55      # detektor-only topilma shu ishonchdan yuqori bo'lsin
+DETECT_ADD_MIN_H = 120      # va shu bo'ydan katta (mayda obyekt odam emas)
 IMGSZ = 960
 # Quti ishonchi ALDAMCHI — odam sanashda unga tayanib bo'lmaydi.
 # O'lchandi (B1, deraza oldida o'tirgan odam): quti ishonchi 0.05, ya'ni
@@ -366,7 +372,9 @@ def people_in(frame):
     for box in res.boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         b = (x1, y1, x2, y2)
-        if (y2 - y1) < PERSON_MIN_H:
+        # Detektor-only topilma: ishonch va o'lcham qattiqroq — pose
+        # tasdiqlamagani uchun bank/stul/soyani odam deb qo'shmaslik kerak.
+        if float(box.conf[0]) < DETECT_ADD_CONF or (y2 - y1) < DETECT_ADD_MIN_H:
             continue
         if any(_iou(b, p["box"]) >= MERGE_IOU or _inside(b, p["box"]) >= MERGE_INSIDE
                for p in found):
