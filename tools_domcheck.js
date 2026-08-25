@@ -13,5 +13,6 @@ global.fetch=async()=>({json:async()=>({branch:'X',branches:['X'],cameras:[],eve
 global.setInterval=()=>{}; global.setTimeout=()=>{};
 global.URL={createObjectURL:()=>'x',revokeObjectURL(){}};
 global.confirm=()=>false;
+ global.location={hash:""};
 try { new Function(js)(); console.log('OK'); }
 catch(e){ console.log('XATO: '+e.constructor.name+': '+e.message); process.exit(1); }

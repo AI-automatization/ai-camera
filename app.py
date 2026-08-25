@@ -234,197 +234,248 @@ def analyzer():
 threading.Thread(target=analyzer, daemon=True).start()
 
 
-PAGE = """
+PAGE = r"""
 <!doctype html><meta charset=utf-8><title>MARS audit kamerasi</title>
 <style>
- :root{--bg:#14110e;--card:#1e1a16;--line:#332c24;--fg:#e8e2d8;--dim:#9a9086}
- *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);
-   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
- header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
-   gap:16px;align-items:baseline;flex-wrap:wrap}
- h1{font-size:16px;margin:0;font-weight:600}
- .total{font-size:14px} .total b{font-size:22px;margin-right:4px}
- #tabs{display:flex;gap:6px}
- #tabs button{background:transparent;color:var(--dim);border:1px solid var(--line);
+ :root{--bg:#141210;--panel:#1c1916;--card:#221e1a;--line:#332c24;
+   --fg:#ece7dd;--dim:#9a9086;--accent:#4ade80;--accentd:#2d4a2d}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--fg);
+   font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+   display:grid;grid-template-columns:210px 1fr;min-height:100vh}
+ /* ── chap menyu ── */
+ nav{background:var(--panel);border-right:1px solid var(--line);padding:18px 12px;
+   display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
+ .logo{font-weight:700;font-size:15px;padding:6px 10px 16px;letter-spacing:.2px}
+ .logo small{display:block;color:var(--dim);font-weight:400;font-size:11px;
+   letter-spacing:0}
+ .navbtn{display:flex;align-items:center;gap:10px;background:none;border:0;
+   color:var(--dim);padding:10px 12px;border-radius:8px;cursor:pointer;
+   font-size:14px;text-align:left;width:100%}
+ .navbtn:hover{background:var(--card);color:var(--fg)}
+ .navbtn.act{background:var(--accentd);color:#dff5df}
+ .navbtn .ic{font-size:16px;width:18px;text-align:center}
+ nav .foot{margin-top:auto;color:var(--dim);font-size:11px;padding:10px;
+   line-height:1.5}
+ /* ── asosiy maydon ── */
+ main{padding:20px 24px;overflow:auto;max-height:100vh}
+ .head{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+ .head h2{font-size:18px;margin:0;font-weight:600}
+ .head .sp{flex:1}
+ .pill{display:inline-flex;align-items:baseline;gap:5px;background:var(--card);
+   border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:13px}
+ .pill b{font-size:16px}
+ .btn{background:var(--card);color:var(--fg);border:1px solid var(--line);
+   border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px}
+ .btn:hover{border-color:#6b5b45}
+ .btn:disabled{opacity:.5;cursor:default}
+ .btn.go{background:var(--accentd);border-color:#3d6b3d;color:#dff5df}
+ select,input[type=text]{background:#14110e;color:var(--fg);
+   border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:14px}
+ .tabseg{display:flex;gap:6px}
+ .tabseg button{background:transparent;color:var(--dim);border:1px solid var(--line);
    border-radius:20px;padding:4px 14px;cursor:pointer;font-size:13px}
- #tabs button.act{background:var(--card);color:var(--fg);border-color:#6b5b45}
- #scanbtn{background:var(--card);color:var(--fg);border:1px solid var(--line);
-   border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
- #scanbtn:disabled{opacity:.5;cursor:default}
- #peoplebtn,#attbtn{background:var(--card);color:var(--fg);
-   border:1px solid var(--line);
-   border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px}
- #att{position:fixed;top:0;right:0;bottom:0;width:460px;background:var(--card);
-   border-left:1px solid var(--line);padding:18px;overflow:auto;display:none;z-index:9;
-   box-shadow:-8px 0 24px #0007}
- #att.on{display:block}
- #att h2{font-size:15px;margin:0 0 4px}
- #att select{background:#14110e;color:var(--fg);border:1px solid var(--line);
-   border-radius:6px;padding:6px 10px;font-size:13px;margin:8px 0}
- #att table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
- #att th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;
-   padding:6px 4px;border-bottom:1px solid var(--line)}
- #att td{padding:7px 4px;border-bottom:1px solid var(--line)}
- #att td.t{font-variant-numeric:tabular-nums}
- #att .cam{color:var(--dim);font-size:11px}
- #people{position:fixed;top:0;right:0;bottom:0;width:400px;background:var(--card);
-   border-left:1px solid var(--line);padding:18px;overflow:auto;display:none;z-index:9;
-   box-shadow:-8px 0 24px #0007}
- #people.on{display:block}
- #people h2{font-size:15px;margin:0 0 4px}
- #people .hint{color:var(--dim);font-size:12px;margin-bottom:12px;line-height:1.5}
- #people input[type=text]{width:100%;background:#14110e;color:var(--fg);
-   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:14px}
- #people .row{display:flex;gap:8px;margin-top:8px}
- #people button{background:var(--line);color:var(--fg);border:0;border-radius:6px;
-   padding:8px 14px;cursor:pointer;font-size:13px}
- #people button.go{background:#3d6b3d;color:#dff5df}
- #preview{width:100%;border-radius:8px;margin-top:10px;display:none;
-   background:#000;aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1)}
- #npreview{width:100%;border-radius:8px;margin-top:10px;display:none;
-   background:#000;aspect-ratio:16/9;object-fit:cover}
- #people select{width:100%;margin-top:8px;background:#14110e;color:var(--fg);
-   border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:13px}
- #step{margin-top:8px;font-size:15px;font-weight:600;min-height:20px}
- #bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;
-   overflow:hidden;display:none}
- #bar i{display:block;height:100%;width:0;background:#4ade80;transition:width .2s}
- #msg{margin-top:10px;font-size:13px;min-height:18px}
- #msg.ok{color:#9fd89f} #msg.err{color:#e08a8a}
- .plist{margin-top:16px;border-top:1px solid var(--line)}
- .prow{display:flex;justify-content:space-between;align-items:center;gap:8px;
-   padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
- .prow .n{flex:1} .prow .s{color:var(--dim);font-size:12px}
- .prow button{padding:3px 9px;font-size:12px;background:transparent;
-   border:1px solid var(--line);color:var(--dim)}
- .warn{margin-top:12px;padding:0;border-radius:6px;font-size:12px;
-   background:#3a2d2a;color:#e0b3a8;line-height:1.6}
- .warn summary{padding:9px 12px;cursor:pointer;font-weight:600;list-style:none}
- .warn summary::-webkit-details-marker{display:none}
- .warn[open] summary{border-bottom:1px solid #52403c}
- .warn details>*:not(summary){padding:0 12px}
- .warn>summary+*{padding:10px 12px}
- .dim{color:var(--dim);font-size:13px}
- main{display:grid;grid-template-columns:1fr 340px;gap:16px;padding:16px;
-   align-items:start}
- @media(max-width:900px){main{grid-template-columns:1fr}}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
- .cam{background:var(--card);border:1px solid var(--line);border-radius:8px;
+ .tabseg button.act{background:var(--card);color:var(--fg);border-color:#6b5b45}
+ .muted{color:var(--dim);font-size:13px}
+ .view{display:none} .view.on{display:block}
+ /* ── kameralar ── */
+ .camwrap{display:grid;grid-template-columns:1fr 320px;gap:18px;align-items:start}
+ @media(max-width:1000px){.camwrap{grid-template-columns:1fr}}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+ .cam{background:var(--card);border:1px solid var(--line);border-radius:10px;
    overflow:hidden;cursor:pointer;transition:border-color .15s}
  .cam:hover{border-color:#6b5b45}
- .cam .shot{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;
-   background:#0b0908}
- .cam .body{padding:8px 10px}
+ .cam .shot{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#0b0908}
+ .cam .body{padding:9px 11px}
  .cam .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
  .cam .nm{font-weight:600;font-size:13px}
  .cam .zone{color:var(--dim);font-size:11px}
- .cam .cnt{display:flex;align-items:baseline;gap:6px;margin-top:4px}
+ .cam .cnt{display:flex;align-items:baseline;gap:6px;margin-top:5px}
  .cam .num{font-size:26px;font-weight:700;line-height:1}
  .cam .num.zero{color:var(--dim);font-weight:400}
  .cam .unit{color:var(--dim);font-size:12px}
- .cam .idbadge{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:20px}
- .idok{background:#2d4a2d;color:#9fd89f} .idno{background:#3a3230;color:#b9a89a}
- .cam.off{opacity:.45}
- .cam.hit{outline:2px solid #d9534f}
- #big{position:fixed;inset:0;background:#000e;display:none;z-index:9;
-   align-items:center;justify-content:center;flex-direction:column;gap:10px}
+ .cam .idbadge{margin-left:auto;font-size:10px;padding:2px 7px;border-radius:20px}
+ .idok{background:var(--accentd);color:#9fd89f} .idno{background:#3a3230;color:#b9a89a}
+ .cam.off{opacity:.45} .cam.hit{outline:2px solid #d9534f}
+ .side{background:var(--card);border:1px solid var(--line);border-radius:10px;
+   padding:14px}
+ .side h3{font-size:13px;margin:0 0 10px;color:var(--dim);font-weight:600;
+   text-transform:uppercase;letter-spacing:.4px}
+ .ev{border-bottom:1px solid var(--line);padding:10px 0}
+ .ev:last-child{border:0} .ev b{font-size:13px}
+ .ev img{width:100%;border-radius:6px;margin-top:6px}
+ .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;
+   font-weight:600;margin-right:6px}
+ .green{background:var(--accentd);color:#9fd89f} .yellow{background:#4a432d;color:#e0d18a}
+ .red{background:#4a2d2d;color:#efa0a0} .black{background:#3a3a3a;color:#ddd}
+ .empty{color:var(--dim);padding:24px 0;text-align:center}
+ /* ── katta ko'rinish ── */
+ #big{position:fixed;inset:0;background:#000d;display:none;z-index:20;
+   align-items:center;justify-content:center;flex-direction:column;gap:12px}
  #big.on{display:flex}
  #bigwrap{position:relative;display:inline-block;line-height:0}
- #big img{max-width:94vw;max-height:82vh;border-radius:8px;background:#000;
-   image-rendering:auto}
+ #big img{max-width:92vw;max-height:80vh;border-radius:10px;background:#000}
  .ov{position:absolute;border:2px solid;border-radius:3px;pointer-events:none}
  .ov span{position:absolute;top:-19px;left:-2px;font-size:11px;line-height:1.4;
    padding:0 5px;border-radius:3px;white-space:nowrap;color:#111;font-weight:600}
- .ov.person{border-color:#4ade80} .ov.person span{background:#4ade80}
+ .ov.person{border-color:var(--accent)} .ov.person span{background:var(--accent)}
  .ov.face{border-color:#60a5fa} .ov.face span{background:#60a5fa}
  .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
  #bigbar{color:var(--fg);display:flex;gap:14px;align-items:center;font-size:14px}
- #bigcount{font-size:22px;margin-left:4px}
- #bigbar button{background:var(--card);color:var(--fg);border:1px solid var(--line);
-   border-radius:6px;padding:6px 14px;cursor:pointer;font-size:14px}
- aside{background:var(--card);border:1px solid var(--line);border-radius:8px;
-   padding:12px;max-height:calc(100vh - 120px);overflow:auto}
- .ev{border-bottom:1px solid var(--line);padding:10px 0}
- .ev:last-child{border:0}
- .ev b{font-size:13px} .ev img{width:100%;border-radius:5px;margin-top:6px}
- .tag{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;
-   font-weight:600;margin-right:6px}
- .green{background:#2d4a2d;color:#9fd89f} .yellow{background:#4a432d;color:#e0d18a}
- .red{background:#4a2d2d;color:#efa0a0} .black{background:#3a3a3a;color:#ddd}
- .empty{color:var(--dim);padding:20px 0;text-align:center}
+ #bigcount{font-size:22px}
+ /* ── davomat ── */
+ table.att{width:100%;border-collapse:collapse;font-size:14px;
+   background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+ table.att th{text-align:left;color:var(--dim);font-weight:500;font-size:12px;
+   padding:11px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+ table.att td{padding:11px 14px;border-bottom:1px solid var(--line)}
+ table.att tr:last-child td{border:0}
+ table.att td.t{font-variant-numeric:tabular-nums;font-size:15px}
+ .att-cam{color:var(--dim);font-size:11px}
+ /* ── xodimlar ── */
+ .staffwrap{display:grid;grid-template-columns:380px 1fr;gap:24px;align-items:start}
+ @media(max-width:900px){.staffwrap{grid-template-columns:1fr}}
+ .enroll{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+ .enroll .fld{margin-bottom:10px}
+ .enroll .fld label{display:block;color:var(--dim);font-size:12px;margin-bottom:5px}
+ .enroll input,.enroll select{width:100%}
+ #preview{width:100%;border-radius:8px;margin:10px 0 0;display:none;
+   background:#000;aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1)}
+ #npreview{width:100%;border-radius:8px;margin:10px 0 0;display:none;
+   background:#000;aspect-ratio:16/9;object-fit:cover}
+ #step{margin-top:10px;font-size:15px;font-weight:600;min-height:20px}
+ #bar{height:6px;background:var(--line);border-radius:3px;margin-top:8px;
+   overflow:hidden;display:none}
+ #bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+ #msg{margin-top:10px;font-size:13px;min-height:18px}
+ #msg.ok{color:#9fd89f} #msg.err{color:#e08a8a}
+ .plist{background:var(--card);border:1px solid var(--line);border-radius:10px;
+   overflow:hidden}
+ .prow{display:flex;justify-content:space-between;align-items:center;gap:10px;
+   padding:11px 14px;border-bottom:1px solid var(--line);font-size:14px}
+ .prow:last-child{border:0}
+ .prow .n{flex:1;font-weight:500} .prow .s{color:var(--dim);font-size:12px}
+ .prow button{padding:4px 11px;font-size:12px;background:transparent;
+   border:1px solid var(--line);color:var(--dim);border-radius:6px;cursor:pointer}
+ .prow button:hover{border-color:#a05a5a;color:#e0a8a8}
+ .warn{margin-bottom:14px;border-radius:8px;font-size:13px;
+   background:#3a2d2a;color:#e0b3a8}
+ .warn summary{padding:11px 14px;cursor:pointer;font-weight:600;list-style:none}
+ .warn summary::-webkit-details-marker{display:none}
+ .warn[open] summary{border-bottom:1px solid #52403c}
+ .warn div{padding:12px 14px;line-height:1.7}
 </style>
-<header>
-  <h1>MARS audit kamerasi</h1>
-  <span id=tabs></span>
-  <span class=total><b id=total>0</b> odam</span>
-  <button id=scanbtn onclick="doScan()">Sanash</button>
-  <button id=peoplebtn onclick="togglePeople()">Xodimlar</button>
-  <button id=attbtn onclick="toggleAtt()">Davomat</button>
-  <span class=dim id=meta>yuklanmoqda…</span>
-</header>
-<div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
-  <span id=bigname></span><b id=bigcount>0</b><span class=dim>odam</span>
-  <span class=dim id=bigfps></span><span class=dim id=bigage></span>
-  <button onclick="closeBig()">Yopish</button></div></div>
-<aside id=att>
-  <h2>Davomat</h2>
-  <div class=hint>Keldi = shu kuni birinchi tanilgan vaqt. Ketdi = oxirgi
-    tanilgan vaqt. Tanish faqat yuz katta ko'rinadigan kameralarda ishlaydi —
-    kirish/coworking kameralari oldidan o'tganda qayd etiladi.</div>
-  <select id=attdate onchange="loadAtt()"></select>
-  <div id=atttable></div>
-  <div class=row><button onclick="closePanels()">Yopish</button></div>
-</aside>
-<aside id=people>
-  <h2>Xodimlar</h2>
-  <div class=hint>Mac kamerasi — sinash uchun. NVR kamerasida tanish
-    ishlashi uchun namunani <b>o'sha kameraning o'zidan</b> olish kerak:
-    shiftdan qaragan kamera boshqa burchak va yorug'likni ko'radi, portret
-    namunasi unga to'g'ri kelmaydi.</div>
-  <input type=text id=pname placeholder="Ism familiya" autocomplete=off>
-  <select id=psrc></select>
-  <video id=preview autoplay muted playsinline></video>
-  <img id=npreview>
-  <div id=step></div>
-  <div id=bar><i></i></div>
-  <div class=row>
-    <button class=go id=addbtn onclick="addFace()">Yuzni olish</button>
-    <button onclick="closePanels()">Yopish</button>
-  </div>
-  <div id=msg></div>
-  <div id=pwarn></div>
-  <div class=plist id=plist></div>
-</aside>
+<body>
+<nav>
+  <div class=logo>MARS<small>audit kamerasi</small></div>
+  <button class=navbtn id=nav-cameras onclick="showView('cameras')">
+    <span class=ic>▦</span> Kameralar</button>
+  <button class=navbtn id=nav-attendance onclick="showView('attendance')">
+    <span class=ic>◷</span> Davomat</button>
+  <button class=navbtn id=nav-staff onclick="showView('staff')">
+    <span class=ic>☺</span> Xodimlar</button>
+  <div class=foot id=foot>yuklanmoqda…</div>
+</nav>
 <main>
-  <div class=grid id=grid></div>
-  <aside>
-    <div style="font-weight:600;margin-bottom:8px">Hodisalar</div>
-    <div id=events><div class=empty>hozircha yo'q</div></div>
-  </aside>
+  <!-- ═══ KAMERALAR ═══ -->
+  <section class="view on" id=view-cameras>
+    <div class=head>
+      <h2>Kameralar</h2>
+      <span class=tabseg id=tabs></span>
+      <div class=sp></div>
+      <span class=pill><b id=total>0</b> odam</span>
+      <button class=btn id=scanbtn onclick="doScan()">Sanash</button>
+    </div>
+    <div class=camwrap>
+      <div class=grid id=grid></div>
+      <div class=side>
+        <h3>Hodisalar</h3>
+        <div id=events><div class=empty>hozircha yo'q</div></div>
+      </div>
+    </div>
+  </section>
+  <!-- ═══ DAVOMAT ═══ -->
+  <section class=view id=view-attendance>
+    <div class=head>
+      <h2>Davomat</h2>
+      <div class=sp></div>
+      <select id=attdate onchange="loadAtt()"></select>
+    </div>
+    <p class=muted style="margin-top:-6px;max-width:640px">
+      Keldi = shu kuni birinchi tanilgan vaqt · Ketdi = oxirgi tanilgan vaqt.
+      Tanish faqat yuz katta ko'rinadigan kameralarda ishlaydi.</p>
+    <div id=atttable></div>
+  </section>
+  <!-- ═══ XODIMLAR ═══ -->
+  <section class=view id=view-staff>
+    <div class=head><h2>Xodimlar</h2></div>
+    <div class=staffwrap>
+      <div class=enroll>
+        <div class=fld>
+          <label>Ism familiya</label>
+          <input type=text id=pname placeholder="masalan: Sardor Madaliyev" autocomplete=off>
+        </div>
+        <div class=fld>
+          <label>Qaysi kameradan</label>
+          <select id=psrc></select>
+        </div>
+        <video id=preview autoplay muted playsinline></video>
+        <img id=npreview>
+        <div id=step></div>
+        <div id=bar><i></i></div>
+        <button class="btn go" id=addbtn onclick="addFace()"
+          style="width:100%;margin-top:12px;padding:10px">Yuzni olish</button>
+        <div id=msg></div>
+        <p class=muted style="margin-top:12px;line-height:1.6">
+          Yuz turli burchakdan olinadi — panel yo'l-yo'riq beradi. Bir odamni
+          bir necha marta olsa tanish yaxshilanadi. Rasm saqlanmaydi.</p>
+      </div>
+      <div>
+        <div id=pwarn></div>
+        <div class=plist id=plist></div>
+      </div>
+    </div>
+  </section>
 </main>
+<div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
+  <span id=bigname></span><b id=bigcount>0</b><span class=muted>odam</span>
+  <span class=muted id=bigfps></span><span class=muted id=bigage></span>
+  <button class=btn onclick="closeBig()">Yopish (Esc)</button></div></div>
 <script>
-const grid=document.getElementById('grid'), evbox=document.getElementById('events');
-let built=false, branch=null;
+let branch=null, built=false, view="cameras";
+function showView(v){
+  view=v;
+  for(const x of ["cameras","attendance","staff"]){
+    document.getElementById("view-"+x).classList.toggle("on", x===v);
+    document.getElementById("nav-"+x).classList.toggle("act", x===v);
+  }
+  if(v!=="cameras") closeBig();
+  if(v!=="staff") closeCam();
+  if(v==="attendance") loadAtt();
+  if(v==="staff") loadPeople();
+}
+// ── kameralar ──
 function buildTabs(list){
-  const box=document.getElementById('tabs');
+  const box=document.getElementById("tabs");
   if(box.childElementCount===list.length) return;
-  box.innerHTML='';
+  box.innerHTML="";
   for(const b of list){
-    const t=document.createElement('button');
+    const t=document.createElement("button");
     t.textContent=b;
     t.onclick=()=>{ if(branch===b) return;
-      branch=b; built=false; closeBig(); grid.innerHTML=''; tick(); };
+      branch=b; built=false; closeBig();
+      document.getElementById("grid").innerHTML=""; tick(); };
     box.appendChild(t);
   }
 }
 function build(cams){
-  grid.innerHTML='';
+  const grid=document.getElementById("grid"); grid.innerHTML="";
   for(const c of cams){
-    const d=document.createElement('div'); d.className='cam'; d.id='c'+c.channel;
+    const d=document.createElement("div"); d.className="cam"; d.id="c"+c.channel;
     d.innerHTML=`<img class=shot id="s${c.channel}">
       <div class=body>
         <div class=top><span class=nm>${c.name}</span>
-          <span class=zone>${c.zone||''}</span></div>
+          <span class=zone>${c.zone||""}</span></div>
         <div class=cnt><span class=num id="n${c.channel}">0</span>
           <span class=unit>odam</span>
           <span class="idbadge idno" id="b${c.channel}">—</span></div>
@@ -434,79 +485,53 @@ function build(cams){
   }
   built=true;
 }
-let bigCh=null, bigName='', lastFrameAt=0, frameGen=0, lastUrl=null;
-// Kadrlarni O'ZIMIZ so'raymiz, MJPEG emas. Sabab: MJPEG oqimi jimgina
-// to'xtaganda brauzer xato bermaydi — rasm qorayadi, JS esa bilmaydi va
-// eski ramkalarni chizaverardi. Bu yerda har kadr alohida so'rov, kelmasa
-// darhol ma'lum bo'ladi.
-async function frameLoop(branch, ch, gen){
-  const img=document.getElementById('bigimg');
-  let seq=-1;
+async function doScan(){
+  const b=document.getElementById("scanbtn");
+  b.disabled=true; b.textContent="Sanalyapti…";
+  await fetch("/scan/"+encodeURIComponent(branch),{method:"POST"});
+}
+// ── katta ko'rinish ──
+let bigCh=null, lastFrameAt=0, frameGen=0, lastUrl=null;
+const BOX_MAX_AGE=1.2;
+async function frameLoop(br, ch, gen){
+  const img=document.getElementById("bigimg"); let seq=-1;
   while(bigCh===ch && frameGen===gen){
     try{
-      const r=await fetch(`/frame/${encodeURIComponent(branch)}/${ch}?after=${seq}&big=1`);
-      if(r.status===204) continue;              // yangi kadr yo'q, yana so'raymiz
+      const r=await fetch(`/frame/${encodeURIComponent(br)}/${ch}?after=${seq}&big=1`);
+      if(r.status===204) continue;
       if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
-      seq=+r.headers.get('X-Seq');
-      const blob=await r.blob();
-      const url=URL.createObjectURL(blob);
-      img.src=url;
-      if(lastUrl) URL.revokeObjectURL(lastUrl);
-      lastUrl=url;
-      lastFrameAt=Date.now();
+      seq=+r.headers.get("X-Seq");
+      const url=URL.createObjectURL(await r.blob());
+      img.src=url; if(lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl=url; lastFrameAt=Date.now();
     }catch(e){ await new Promise(s=>setTimeout(s,400)); }
   }
 }
-async function doScan(){
-  const b=document.getElementById('scanbtn');
-  b.disabled=true; b.textContent='Sanalyapti…';
-  await fetch('/scan/'+encodeURIComponent(branch),{method:'POST'});
-}
-// Ramkalar rasmga CHIZILMAYDI — ular rasm ustidagi HTML elementlar.
-// Sabab: chizish uchun kadrni dekod qilib, qayta kodlash kerak edi va bu
-// rasmni ikkinchi marta siqib xiralashtirardi. Endi kadr kameradan
-// qanday kelsa shundayligicha ko'rsatiladi.
-// Ramkalar tahlil paytidagi holatni ko'rsatadi, rasm esa jonli. Odam
-// yurayotgan bo'lsa eski ramka noto'g'ri joyda turadi (eskalatorda aynan
-// shunday bo'ldi). Shuning uchun eskirgan ramka umuman chizilmaydi.
-// Ramkalar 0.5 sekundda yangilanadi, shuning uchun 1.2 sekunddan eskisi
-// tahlil orqada qolganini bildiradi — bunday ramkani ko'rsatgandan
-// ko'rsatmagan yaxshi.
-const BOX_MAX_AGE = 1.2;
 function drawBoxes(boxes){
-  const wrap=document.getElementById('bigwrap'), img=document.getElementById('bigimg');
-  for(const el of [...wrap.querySelectorAll('.ov')]) el.remove();
+  const wrap=document.getElementById("bigwrap"), img=document.getElementById("bigimg");
+  for(const el of [...wrap.querySelectorAll(".ov")]) el.remove();
   if(!img.clientWidth) return;
   for(const b of boxes){
-    const d=document.createElement('div');
-    d.className='ov '+b.kind;
-    d.style.left=b.x+'%'; d.style.top=b.y+'%';
-    d.style.width=b.w+'%'; d.style.height=b.h+'%';
-    d.innerHTML='<span>'+b.label+'</span>';
-    wrap.appendChild(d);
+    const d=document.createElement("div"); d.className="ov "+b.kind;
+    d.style.left=b.x+"%"; d.style.top=b.y+"%";
+    d.style.width=b.w+"%"; d.style.height=b.h+"%";
+    d.innerHTML="<span>"+b.label+"</span>"; wrap.appendChild(d);
   }
 }
 function openBig(ch,name){
-  bigCh=ch; bigName=name; lastFrameAt=0;
-  drawBoxes([]);          // eski kameraning ramkalari qolib ketmasin
-  document.getElementById('bigimg').removeAttribute('src');
+  bigCh=ch; lastFrameAt=0; drawBoxes([]);
+  document.getElementById("bigimg").removeAttribute("src");
   frameLoop(branch, ch, ++frameGen);
-  document.getElementById('bigname').textContent=name;
-  document.getElementById('big').classList.add('on');
+  document.getElementById("bigname").textContent=name;
+  document.getElementById("big").classList.add("on");
 }
 function closeBig(){
   bigCh=null; frameGen++; lastFrameAt=0; drawBoxes([]);
-  document.getElementById('bigimg').removeAttribute('src');
-  document.getElementById('big').classList.remove('on');
+  document.getElementById("bigimg").removeAttribute("src");
+  document.getElementById("big").classList.remove("on");
 }
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeBig();});
-let lastScan=-1;
-function toggleAtt(){
-  const p=document.getElementById("att");
-  const opening=!p.classList.contains("on");
-  closePanels();                 // ikkinchi panel ochiq bo'lsa yopamiz
-  if(opening){ p.classList.add("on"); loadAtt(); }
-}
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeBig();});
+// ── davomat ──
 async function loadAtt(){
   const sel=document.getElementById("attdate");
   const q=sel.value?("?date="+sel.value):"";
@@ -518,30 +543,22 @@ async function loadAtt(){
       : `<option>${d.date}</option>`;
   }
   document.getElementById("atttable").innerHTML = d.rows.length ? `
-    <table><tr><th>Xodim</th><th>Keldi</th><th>Ketdi</th><th></th></tr>
+    <table class=att><tr><th>Xodim</th><th>Keldi</th><th>Ketdi</th>
+      <th>Kamera</th><th></th></tr>
     ${d.rows.map(r=>`<tr>
-      <td>${r.name}<div class=cam>${r.last_cam}</div></td>
+      <td><b>${r.name}</b></td>
       <td class=t>${r.first.slice(0,5)}</td>
       <td class=t>${r.last.slice(0,5)}</td>
-      <td class=cam>${r.seen}x</td></tr>`).join("")}
+      <td class=att-cam>${r.last_cam}</td>
+      <td class=att-cam>${r.seen}x</td></tr>`).join("")}
     </table>`
-    : "<div class=hint style=margin-top:12px>Bu kunda yozuv yo'q</div>";
+    : "<div class=empty>Bu kunda yozuv yo'q</div>";
 }
-function togglePeople(){
-  const p=document.getElementById("people");
-  const opening=!p.classList.contains("on");
-  closePanels();
-  if(opening){ p.classList.add("on"); loadPeople(); }
-}
-function closePanels(){
-  document.getElementById("att").classList.remove("on");
-  document.getElementById("people").classList.remove("on");
-  closeCam();               // yopilganda kamera ham o'chsin
-}
+// ── xodimlar ──
 async function loadSources(){
   const sel=document.getElementById("psrc");
   if(sel.options.length) return;
-  const opts=['<option value="mac">Mac kamera (brauzer)</option>'];
+  const opts=["<option value=mac>Mac kamera (brauzer)</option>"];
   for(const b of (await (await fetch("/state")).json()).branches){
     if(b==="Mac") continue;
     const s=await (await fetch("/state?branch="+encodeURIComponent(b))).json();
@@ -552,47 +569,37 @@ async function loadSources(){
 }
 async function loadPeople(){
   loadSources();
-  const d=await (await fetch('/faces')).json();
-  // Ogohlantirishlar yig'ilgan holda — hammasini ochib tashlamaymiz
-  const box=document.getElementById('pwarn');
+  const d=await (await fetch("/faces")).json();
+  const box=document.getElementById("pwarn");
   if(d.problems.length){
     const items=d.problems.map(p=> p.type==="duplicate"
       ? `${p.a} va ${p.b} — bir odammi? (${p.score})`
       : `${p.name}: namunalar aralashgan (${p.samples} ta)`).join("<br>");
-    box.innerHTML=`<details class=warn><summary>${d.problems.length} ta muammo — bazani tekshiring</summary>${items}</details>`;
+    box.innerHTML=`<details class=warn><summary>${d.problems.length} ta muammo — bazani tekshiring</summary><div>${items}</div></details>`;
   } else box.innerHTML="";
-  document.getElementById('plist').innerHTML = d.people.map(p=>`
+  document.getElementById("plist").innerHTML = d.people.map(p=>`
     <div class=prow><span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
       <button onclick="delFace('${p.name.replace(/'/g,"\\'")}')">O'chirish</button>
-    </div>`).join('') || "<div class=hint>Bazada xodim yo'q</div>";
+    </div>`).join("") || "<div class=empty>Bazada xodim yo'q</div>";
 }
-function say(text, ok){
-  const m=document.getElementById('msg');
-  m.textContent=text; m.className = ok ? 'ok' : 'err';
-}
-// Yuz TURLI BURCHAKDAN olinadi. Bitta kadrdan olingan namuna faqat o'sha
-// burchakni biladi — odam boshini burganda tanish yo'qoladi.
-//
-// Kamera BRAUZERDA ochiladi (getUserMedia), serverdagi kamera emas: server
-// ko'rinishi tarmoq orqali kechikadi va odam ko'rgan kadri bilan saqlangan
-// kadr mos kelmaydi. Bu yerda ikkalasi ham bitta <video> dan.
+function say(t,ok){ const m=document.getElementById("msg");
+  m.textContent=t; m.className=ok?"ok":"err"; }
 const STEPS=[["To'g'riga qarang",3],["Sekin CHAPGA buring",3],
              ["Sekin O'NGGA buring",3],["Biroz YUQORIGA",2],["Biroz PASTGA",2]];
 let camStream=null;
 async function openCam(){
-  if(!camStream)
-    camStream=await navigator.mediaDevices.getUserMedia(
-      {video:{width:{ideal:1280},height:{ideal:960}}});
+  if(!camStream) camStream=await navigator.mediaDevices.getUserMedia(
+    {video:{width:{ideal:1280},height:{ideal:960}}});
   return camStream;
 }
 function closeCam(){
   if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
 }
-function grab(video){
+function grab(v){
   const c=document.createElement("canvas");
-  c.width=video.videoWidth; c.height=video.videoHeight;
-  c.getContext("2d").drawImage(video,0,0);
+  c.width=v.videoWidth; c.height=v.videoHeight;
+  c.getContext("2d").drawImage(v,0,0);
   return new Promise(r=>c.toBlob(r,"image/jpeg",0.92));
 }
 async function addFace(){
@@ -605,23 +612,17 @@ async function addFace(){
   const step=document.getElementById("step"), fill=bar.querySelector("i");
   btn.disabled=true; say("", true);
   try{
-    vid.srcObject=await openCam();
-    vid.style.display="block"; bar.style.display="block";
+    vid.srcObject=await openCam(); vid.style.display="block"; bar.style.display="block";
     await new Promise(r=>{ if(vid.videoWidth) r(); else vid.onloadedmetadata=r; });
-  }catch(e){
-    btn.disabled=false;
-    say("Kameraga ruxsat berilmadi: "+e.message, false);
-    return;
-  }
+  }catch(e){ btn.disabled=false; say("Kameraga ruxsat berilmadi: "+e.message, false); return; }
   const total=STEPS.reduce((a,s)=>a+s[1],0);
   let done=0, saved=0, skipped=0, lastErr="";
   for(const [text,shots] of STEPS){
     step.textContent=text;
-    await new Promise(s=>setTimeout(s,1300));   // pozitsiyaga vaqt
+    await new Promise(s=>setTimeout(s,1300));
     for(let i=0;i<shots;i++){
       const blob=await grab(vid);
-      const fd=new FormData();
-      fd.append("name",name); fd.append("image",blob,"f.jpg");
+      const fd=new FormData(); fd.append("name",name); fd.append("image",blob,"f.jpg");
       try{
         const d=await (await fetch("/faces/image",{method:"POST",body:fd})).json();
         if(d.ok) saved++; else { skipped++; lastErr=d.message; }
@@ -631,28 +632,23 @@ async function addFace(){
       await new Promise(s=>setTimeout(s,420));
     }
   }
-  closeCam();
-  vid.srcObject=null; vid.style.display="none"; bar.style.display="none";
+  closeCam(); vid.srcObject=null; vid.style.display="none"; bar.style.display="none";
   step.textContent=""; fill.style.width="0"; btn.disabled=false;
-  if(saved) say(name+": "+saved+" ta namuna saqlandi"
-                +(skipped?" ("+skipped+" tasi o'tkazildi)":""), true);
+  if(saved) say(name+": "+saved+" ta namuna saqlandi"+(skipped?" ("+skipped+" o'tkazildi)":""), true);
   else say(lastErr || "Yuz olinmadi", false);
   document.getElementById("pname").value = saved ? "" : name;
   loadPeople();
 }
-// NVR kamerasidan olish: kadrni server oladi (brauzer u kameraga ulana
-// olmaydi). Ko'rinish /frame orqali ko'rsatiladi.
 async function addFaceFromNvr(name, src){
-  const [branch, ch]=src.split("/");
+  const [br, ch]=src.split("/");
   const btn=document.getElementById("addbtn"), bar=document.getElementById("bar");
   const step=document.getElementById("step"), fill=bar.querySelector("i");
   const img=document.getElementById("npreview");
-  btn.disabled=true; bar.style.display="block"; img.style.display="block";
-  say("", true);
+  btn.disabled=true; bar.style.display="block"; img.style.display="block"; say("", true);
   let alive=true, seq=-1;
   (async()=>{ while(alive){
     try{
-      const r=await fetch(`/frame/${encodeURIComponent(branch)}/${ch}?after=${seq}&big=1`);
+      const r=await fetch(`/frame/${encodeURIComponent(br)}/${ch}?after=${seq}&big=1`);
       if(r.status===204) continue;
       if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
       seq=+r.headers.get("X-Seq");
@@ -669,7 +665,7 @@ async function addFaceFromNvr(name, src){
       try{
         const d=await (await fetch("/faces",{method:"POST",
           headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({name, branch, channel:ch, branches:[branch]})})).json();
+          body:JSON.stringify({name, branch:br, channel:ch, branches:[br]})})).json();
         if(d.ok) saved++; else { skipped++; lastErr=d.message; }
       }catch(e){ skipped++; lastErr=e.message; }
       done++; fill.style.width=(done/total*100)+"%";
@@ -677,88 +673,78 @@ async function addFaceFromNvr(name, src){
       await new Promise(s=>setTimeout(s,600));
     }
   }
-  alive=false;
-  img.style.display="none"; img.removeAttribute("src");
-  bar.style.display="none"; step.textContent=""; fill.style.width="0";
-  btn.disabled=false;
-  if(saved) say(name+": "+saved+" ta namuna saqlandi"
-                +(skipped?" ("+skipped+" tasi o'tkazildi)":""), true);
+  alive=false; img.style.display="none"; img.removeAttribute("src");
+  bar.style.display="none"; step.textContent=""; fill.style.width="0"; btn.disabled=false;
+  if(saved) say(name+": "+saved+" ta namuna saqlandi"+(skipped?" ("+skipped+" o'tkazildi)":""), true);
   else say(lastErr || "Yuz olinmadi", false);
   document.getElementById("pname").value = saved ? "" : name;
   loadPeople();
 }
 async function delFace(name){
   if(!confirm(name+" o'chirilsinmi?")) return;
-  const d=await (await fetch('/faces/'+encodeURIComponent(name),
-                             {method:'DELETE'})).json();
+  const d=await (await fetch("/faces/"+encodeURIComponent(name),{method:"DELETE"})).json();
   say(d.message, d.ok); loadPeople();
 }
+// ── har 3 sekundda holat ──
 async function tick(){
-  const s=await (await fetch('/state'+(branch?'?branch='+encodeURIComponent(branch):''))).json();
+  const s=await (await fetch("/state"+(branch?"?branch="+encodeURIComponent(branch):""))).json();
   branch=s.branch;
   buildTabs(s.branches);
-  for(const t of document.getElementById('tabs').children)
-    t.classList.toggle('act', t.textContent===branch);
+  for(const t of document.getElementById("tabs").children)
+    t.classList.toggle("act", t.textContent===branch);
   if(!built) build(s.cameras);
-  const total=s.cameras.reduce((a,c)=>a+c.count,0);
-  document.getElementById('total').textContent=total;
-  const warn = s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa qoldi`
-             : (!s.reachable ? 'NVR ga ulanmadi' : '');
-  const b=document.getElementById('scanbtn');
-  b.disabled=s.scanning;
-  b.textContent = s.scanning ? 'Sanalyapti…' : 'Sanash';
-  const ago = s.scanned_ago==null ? '' :
-    (s.scanned_ago<60 ? `${s.scanned_ago} sek oldin` : `${Math.floor(s.scanned_ago/60)} daqiqa oldin`);
-  document.getElementById('meta').textContent =
-    (warn ? warn+' · ' : '') +
-    (ago ? `sanoq ${ago} · ` : '') +
-    `${s.online}/${s.cameras.length} kamera · `+
+  document.getElementById("total").textContent=s.cameras.reduce((a,c)=>a+c.count,0);
+  const warn = s.locked ? `NVR QULFLANGAN — ${Math.ceil(s.lock_left/60)} daqiqa`
+             : (!s.reachable ? "NVR ga ulanmadi" : "");
+  const b=document.getElementById("scanbtn");
+  b.disabled=s.scanning; b.textContent=s.scanning?"Sanalyapti…":"Sanash";
+  const ago = s.scanned_ago==null ? "" :
+    (s.scanned_ago<60 ? `${s.scanned_ago}s oldin` : `${Math.floor(s.scanned_ago/60)} daq oldin`);
+  document.getElementById("foot").innerHTML =
+    (warn ? `<span style=color:#e08a8a>${warn}</span><br>` : "") +
+    `${s.online}/${s.cameras.length} kamera<br>` +
+    (ago ? `sanoq ${ago}<br>` : "") +
     `${s.rules} qoida · ${s.detectors} detektor`;
-  document.getElementById('meta').style.color = warn ? '#e08a8a' : '';
   for(const c of s.cameras){
-    const el=document.getElementById('c'+c.channel);
-    if(!el) continue;
-    el.classList.toggle('hit', c.hit);
-    el.classList.toggle('off', !c.online);
-    const n=document.getElementById('n'+c.channel);
-    n.textContent=c.count; n.classList.toggle('zero', c.count===0);
-    const b=document.getElementById('b'+c.channel);
-    b.textContent=c.identity?'yuz aniq':'yuz kichik';
-    b.className='idbadge '+(c.identity?'idok':'idno');
-    // Grid MUZLATILGAN — kadrlar faqat sanashdan keyin yangilanadi.
-    // Kameralar doimiy ishlamaydi, ichiga bosib kirilganda ishlaydi.
-    // Mac kamerasi bundan mustasno: u NVR budjetini sarflamaydi, shuning
-    // uchun grid'da ham jonli turadi.
+    const el=document.getElementById("c"+c.channel); if(!el) continue;
+    el.classList.toggle("hit", c.hit); el.classList.toggle("off", !c.online);
+    const n=document.getElementById("n"+c.channel);
+    n.textContent=c.count; n.classList.toggle("zero", c.count===0);
+    const bd=document.getElementById("b"+c.channel);
+    bd.textContent=c.identity?"yuz aniq":"yuz kichik";
+    bd.className="idbadge "+(c.identity?"idok":"idno");
     if(bigCh===null && (s.local || lastScan!==s.scanned_ago))
-      document.getElementById('s'+c.channel).src=
-        '/still/'+encodeURIComponent(branch)+'/'+c.channel+'?t='+Date.now();
+      document.getElementById("s"+c.channel).src=
+        "/still/"+encodeURIComponent(branch)+"/"+c.channel+"?t="+Date.now();
     if(c.channel===bigCh){
-      document.getElementById('bigfps').textContent=c.fps+' yangi kadr/sek';
-      document.getElementById('bigcount').textContent=c.count;
-      // Kadr kelmayotgan bo'lsa ramkalar ham ko'rsatilmaydi — qora ekran
-      // ustida osilib qolgan ramkalardan ko'ra bo'sh ekran halolroq.
-      const live = Date.now()-lastFrameAt < 1500;
-      const fresh = live && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
+      document.getElementById("bigfps").textContent=c.fps+" kadr/sek";
+      document.getElementById("bigcount").textContent=c.count;
+      const live=Date.now()-lastFrameAt<1500;
+      const fresh=live && c.boxes_age!=null && c.boxes_age<=BOX_MAX_AGE;
       drawBoxes(fresh ? (c.boxes||[]) : []);
-      document.getElementById('bigage').textContent =
-        live ? '' : 'kadr kelmayapti…';
+      document.getElementById("bigage").textContent=live?"":"kadr kelmayapti…";
     }
   }
-  lastScan = s.scanned_ago;
-  if(document.getElementById("att").classList.contains("on")) loadAtt();
+  lastScan=s.scanned_ago;
+  const evbox=document.getElementById("events");
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
       <span class="tag ${e.rule_type}">${e.rule_number} · ${e.score} ball</span>
       <b>${e.camera}</b>
-      <div class=dim>${e.at.replace('T',' ')}</div>
+      <div class=muted>${e.at.replace("T"," ")}</div>
       <div>${e.reason}</div>
-      <div class=dim style="margin-top:4px">${e.rule_text}</div>
+      <div class=muted style="margin-top:4px">${e.rule_text}</div>
       <img src="/shot/${e.id}" loading=lazy>
-    </div>`).join('') : "<div class=empty>hodisa yo'q</div>";
+    </div>`).join("") : "<div class=empty>hodisa yo'q</div>";
+  if(view==="attendance") loadAtt();
 }
+// URL hash bilan bo'lim ochish (#davomat, #xodimlar)
+const hashView={davomat:"attendance",xodimlar:"staff",kameralar:"cameras"};
+if(hashView[location.hash.slice(1)]) showView(hashView[location.hash.slice(1)]);
 tick(); setInterval(tick,3000);
 </script>
 """
+
 
 
 @app.get("/")

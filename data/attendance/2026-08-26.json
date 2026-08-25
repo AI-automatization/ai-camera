@@ -19,5 +19,12 @@
   "first_cam": "Mac/Mac kamera",
   "last_cam": "Mac/Mac kamera",
   "seen": 18
+ },
+ "Test": {
+  "first": "00:44:37",
+  "last": "00:44:37",
+  "first_cam": "Mac/Mac kamera",
+  "last_cam": "Mac/Mac kamera",
+  "seen": 1
  }
 }
