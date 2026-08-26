@@ -216,6 +216,30 @@ def main():
     run("ro'yxatga olish chegarasi tanishnikidan qattiq",
         _f.MIN_ENROLL_PX > _f.MIN_RECOGNIZE_PX)
 
+    print("\n── Sig'im qoidasi (mahalliy)")
+    det=detectors.Capacity()
+    t0=datetime.datetime.now()
+    # 5 kishi (chegara 4) — 5 sekunddan keyin hodisa
+    fired=[]
+    for sec in (0,2,4,6):
+        c=ctx("1101", persons=[person() for _ in range(5)], camera_name="B4",
+              now=t0+datetime.timedelta(seconds=sec))
+        fired+=det.check(c)
+    run("4 dan ko'p bo'lsa hodisa chiqadi", len(fired)==1)
+    if fired:
+        run("mahalliy hodisa (ball yo'q)", fired[0]["rule_number"]=="LOKAL")
+        run("odam soni xabarda", "5 kishi" in fired[0]["reason"])
+    # 4 kishi (chegarada) — hodisa yo'q
+    det2=detectors.Capacity()
+    for sec in (0,3,6):
+        c=ctx("1101", persons=[person() for _ in range(4)], camera_name="B4",
+              now=t0+datetime.timedelta(seconds=sec))
+        r2=det2.check(c)
+    run("chegarada (4) hodisa yo'q", r2==[])
+    # sig'im qo'yilmagan kamera — tegmaydi
+    c=ctx("1601", persons=[person() for _ in range(9)], camera_name="B3")
+    run("sig'im yo'q kamera — hodisa yo'q", det2.check(c)==[])
+
     print("\n── Davomat")
     import os, time as _t, shutil as _sh, datetime as _dt
     import attendance as _att

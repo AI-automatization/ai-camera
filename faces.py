@@ -39,7 +39,11 @@ DET_SIZE = (320, 320)
 #
 # Shuning uchun kichik yuzda tanishga URINILMAYDI ham: ism ham berilmaydi,
 # qimmat hisob (~138 ms) ham bekorga sarflanmaydi.
-MIN_RECOGNIZE_PX = 60
+# 50 ga tushirildi: jonli o'lchandi (Yunusobod Coworking 1), yuz 55px da
+# Sardor 0.57 ball berdi — ishonchli. 40-44px da esa ball 0.2 (shovqin),
+# lekin THRESHOLD (0.40) ularni baribir rad etadi. Ya'ni 50px chegara
+# haqiqiy tanishlarni o'tkazadi, yolg'onni THRESHOLD to'sadi.
+MIN_RECOGNIZE_PX = 45
 
 _det = _rec = None
 _lock = threading.Lock()

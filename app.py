@@ -308,6 +308,7 @@ PAGE = r"""
    font-weight:600;margin-right:6px}
  .green{background:var(--accentd);color:#9fd89f} .yellow{background:#4a432d;color:#e0d18a}
  .red{background:#4a2d2d;color:#efa0a0} .black{background:#3a3a3a;color:#ddd}
+ .info{background:#2d3a4a;color:#a8c8e0}
  .empty{color:var(--dim);padding:24px 0;text-align:center}
  /* ── katta ko'rinish ── */
  #big{position:fixed;inset:0;background:#000d;display:none;z-index:20;
@@ -323,6 +324,11 @@ PAGE = r"""
  .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
  #bigbar{color:var(--fg);display:flex;gap:14px;align-items:center;font-size:14px}
  #bigcount{font-size:22px}
+ #bigtop{min-height:44px;display:flex;gap:10px;align-items:center;
+   justify-content:center;flex-wrap:wrap}
+ .faceb{font-size:20px;font-weight:700;padding:8px 20px;border-radius:30px}
+ .faceb.ok{background:var(--accent);color:#062b10}
+ .faceb.small{background:#4a432d;color:#e0d18a;font-size:15px;font-weight:600}
  /* ── davomat ── */
  table.att{width:100%;border-collapse:collapse;font-size:14px;
    background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -438,7 +444,7 @@ PAGE = r"""
     </div>
   </section>
 </main>
-<div id=big><div id=bigwrap><img id=bigimg></div><div id=bigbar>
+<div id=big><div id=bigtop></div><div id=bigwrap><img id=bigimg></div><div id=bigbar>
   <span id=bigname></span><b id=bigcount>0</b><span class=muted>odam</span>
   <span class=muted id=bigfps></span><span class=muted id=bigage></span>
   <button class=btn onclick="closeBig()">Yopish (Esc)</button></div></div>
@@ -511,6 +517,12 @@ async function frameLoop(br, ch, gen){
         const fresh=m.age!=null && m.age<=BOX_MAX_AGE;
         drawBoxes(fresh ? (m.boxes||[]) : []);
         document.getElementById("bigcount").textContent=m.count||0;
+        const top=document.getElementById("bigtop");
+        if(m.named && m.named.length)
+          top.innerHTML=m.named.map(n=>`<span class="faceb ok">✓ ${n}</span>`).join("");
+        else if(m.face_px>=25)
+          top.innerHTML=`<span class="faceb small">Yuz topildi (${m.face_px}px) — tanish uchun yaqinroq keling</span>`;
+        else top.innerHTML="";
       }catch(e){}
     }catch(e){ await new Promise(s=>setTimeout(s,400)); }
   }
@@ -748,7 +760,7 @@ async function tick(){
   const evbox=document.getElementById("events");
   evbox.innerHTML = s.events.length ? s.events.map(e=>`
     <div class=ev>
-      <span class="tag ${e.rule_type}">${e.rule_number} · ${e.score} ball</span>
+      <span class="tag ${e.rule_type}">${e.rule_number==="LOKAL"?"Ogohlantirish":e.rule_number+" · "+e.score+" ball"}</span>
       <b>${e.camera}</b>
       <div class=muted>${e.at.replace("T"," ")}</div>
       <div>${e.reason}</div>
@@ -944,8 +956,11 @@ def frame(branch, channel):
         data, seq = cam.jpeg, cam.seq
         st = dict(cam.state)
     import json as _json
+    named = [f["name"] for f in st.get("faces", []) if f.get("name")]
+    facepx = max((f["box"][2] for f in st.get("faces", [])), default=0)
     meta = _json.dumps({"boxes": st.get("boxes", []),
                         "count": st.get("count", 0),
+                        "named": named, "face_px": facepx,
                         "age": round(time.time() - st["at"], 1) if st.get("at") else None})
     return Response(data or nvr.PLACEHOLDER, mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store", "X-Seq": str(seq),

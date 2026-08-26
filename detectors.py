@@ -164,6 +164,24 @@ class Detector:
             "detector": self.name,
         }
 
+    def local_event(self, title, reason, now=None):
+        """Mars qoidasiga bog'lanmagan mahalliy hodisa (sig'im va h.k.).
+
+        rule_number = "LOKAL" — hodisa ro'yxatida oddiy audit qoidalaridan
+        ajralib turadi, ball qo'yilmaydi.
+        """
+        key = f"lokal:{title}"
+        if not self._cooldown_ok(key, now):
+            return None
+        return {
+            "rule_number": "LOKAL", "rule_id": None, "rule_text": "",
+            "rule_type": "info", "score": 0,
+            "who": title, "reason": reason, "seconds": 0.0,
+            "at": datetime.datetime.fromtimestamp(
+                now or time.time()).isoformat(timespec="seconds"),
+            "detector": self.name,
+        }
+
     def check(self, ctx):
         raise NotImplementedError
 
@@ -472,10 +490,41 @@ class CoworkingGathering(Detector):
 # ─────────────────────────────────────────────────────────────── ro'yxat
 # Faqat yozilgan detektorlar. rules.COVERAGE da bor, lekin bu yerda yo'qlari
 # hali yozilmagan — status() ularni ko'rsatadi.
+# ── Mahalliy sig'im qoidalari (Mars audit emas) ──────────────────────
+# {(filial, kamera nomi): maksimal odam}. Shu sondan ko'p bo'lsa "odam
+# ko'paydi" hodisasi chiqadi. Ofis o'z ehtiyoji uchun qo'yadi.
+CAPACITY = {
+    ("Yunusobod", "B4"): 4,
+}
+
+
+class Capacity(Detector):
+    """Xonada belgilangan sondan ko'p odam bo'lsa ogohlantiradi."""
+
+    name = "capacity"
+    gap_tol = 30.0
+
+    def check(self, ctx):
+        limit = CAPACITY.get((ctx.branch, ctx.camera_name))
+        if limit is None:
+            return []
+        over = ctx.head_count > limit
+        seconds = self.streak.update(ctx.channel, over, ctx.now.timestamp())
+        # Bir necha kadr uzluksiz oshib tursa (tasodifiy sanoq emas)
+        if over and seconds >= 5:
+            ev = self.local_event(
+                f"{ctx.camera_name}: odam ko'paydi",
+                f"{ctx.camera_name} xonasida {ctx.head_count} kishi "
+                f"(chegara {limit})", ctx.now.timestamp())
+            return [ev] if ev else []
+        return []
+
+
 DETECTORS = [
     LessonStart(), LeftRoom(), AloneWithStudent(), AdminZoneLoitering(),
     LateArrival(), LessonOverrun(),
     Sleeping(), MentorSeated(), CoworkingGathering(),
+    Capacity(),
 ]
 
 

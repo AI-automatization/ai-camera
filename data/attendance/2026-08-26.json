@@ -29,16 +29,16 @@
  },
  "Suhrob": {
   "first": "00:47:02",
-  "last": "00:47:02",
+  "last": "15:57:36",
   "first_cam": "Mac/Mac kamera",
-  "last_cam": "Mac/Mac kamera",
-  "seen": 1
+  "last_cam": "Yunusobod/Admin-kassa",
+  "seen": 10
  },
  "Akrom": {
   "first": "00:47:03",
-  "last": "00:52:14",
+  "last": "15:56:43",
   "first_cam": "Mac/Mac kamera",
-  "last_cam": "Mac/Mac kamera",
-  "seen": 3
+  "last_cam": "Yunusobod/Coworking 1",
+  "seen": 12
  }
 }
