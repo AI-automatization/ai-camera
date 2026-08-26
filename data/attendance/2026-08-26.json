@@ -29,16 +29,30 @@
  },
  "Suhrob": {
   "first": "00:47:02",
-  "last": "15:57:36",
+  "last": "16:05:37",
   "first_cam": "Mac/Mac kamera",
-  "last_cam": "Yunusobod/Admin-kassa",
-  "seen": 10
+  "last_cam": "Yunusobod/Coworking 1",
+  "seen": 13
  },
  "Akrom": {
   "first": "00:47:03",
-  "last": "15:56:43",
+  "last": "16:04:31",
   "first_cam": "Mac/Mac kamera",
   "last_cam": "Yunusobod/Coworking 1",
-  "seen": 12
+  "seen": 22
+ },
+ "Behruz Sotimboyev": {
+  "first": "16:03:54",
+  "last": "16:03:54",
+  "first_cam": "Yunusobod/Coworking 1",
+  "last_cam": "Yunusobod/Coworking 1",
+  "seen": 1
+ },
+ "Sunnatbek Yusupov": {
+  "first": "16:04:24",
+  "last": "16:04:24",
+  "first_cam": "Yunusobod/Coworking 1",
+  "last_cam": "Yunusobod/Coworking 1",
+  "seen": 1
  }
 }

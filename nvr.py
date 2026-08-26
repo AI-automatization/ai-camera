@@ -92,6 +92,14 @@ ENABLED = [b.strip() for b in
            os.environ.get("BRANCHES", "Yunusobod,Chilonzor,Minor").split(",")
            if b.strip() in BRANCH_HOSTS]
 
+# Faqat ma'lum kanallar: CHANNELS="201,301". Bo'sh = hammasi. Bitta kamera
+# bilan yuk kam bo'ladi (kompyuter qizimaydi).
+_ONLY_CH = [c.strip() for c in os.environ.get("CHANNELS", "").split(",") if c.strip()]
+if _ONLY_CH:
+    for _b in BRANCH_CAMERAS:
+        BRANCH_CAMERAS[_b] = {ch: nm for ch, nm in BRANCH_CAMERAS[_b].items()
+                              if ch in _ONLY_CH}
+
 # NVR ba'zan javob bermay qoladi: 60 sekundlik o'lchovda 2.24, 2.07 va 1.05
 # sekundlik so'rovlar uchradi. Ikkita oquvchi ip bo'lsa, ikkalasi ham shunday
 # so'rovga tiqilib qolsa ekran muzlaydi — Sardor ko'rgan qotish shundan edi.

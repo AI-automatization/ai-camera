@@ -28,6 +28,7 @@ from flask import (Flask, Response, jsonify, render_template_string,
 
 import attendance
 import nvr
+import tracker
 import rules
 import faces
 import pose
@@ -170,6 +171,8 @@ def analyzer():
         branch = cam.branch.name
         try:
             persons = pose.people_in(frame)
+            # Kuzatuv: raqam kadrdan kadrga barqaror qolsin, son jimirlamasin
+            persons = tracker.get(cam.key).update(persons)
             # Yuz qidirish eng qimmat qadam (138 ms). Xonada odam bo'lmasa
             # qidirishning ma'nosi yo'q — bo'sh xonalarda bekorga sarflanardi.
             #
@@ -199,7 +202,7 @@ def analyzer():
                   "y": round(100 * p["box"][1] / h, 2),
                   "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
                   "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
-                  "label": str(i),
+                  "label": str(p.get("tid", i)),
                   "kind": "alert" if (p["reliable"] and p["head_down"]) else "person"}
                  for i, p in enumerate(persons, 1)]
         # Yuz ramkasi FAQAT kim ekani aniqlanganda. Tanib bo'lmaydigan
