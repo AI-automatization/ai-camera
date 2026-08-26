@@ -23,7 +23,8 @@ import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DIR = os.path.join(_HERE, "data", "attendance")
-os.makedirs(DIR, exist_ok=True)
+SHOTS = os.path.join(DIR, "shots")
+os.makedirs(SHOTS, exist_ok=True)
 
 # Bir ko'rinishdan keyin shu vaqt ichida qayta yozib o'tirmaymiz — analizator
 # sekundiga bir necha marta tanishi mumkin, diskka har safar yozish shart emas.
@@ -56,8 +57,17 @@ def _save(day, data):
     os.replace(tmp, _path(day))
 
 
-def record(name, branch, camera, when=None):
-    """Xodim ko'rindi. Birinchi ko'rinish = keldi, har keyingisi last ni suradi."""
+def _shot_path(day, name):
+    safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in name)
+    return os.path.join(SHOTS, f"{day}__{safe}.jpg")
+
+
+def record(name, branch, camera, when=None, shot=None):
+    """Xodim ko'rindi. Birinchi ko'rinish = keldi, har keyingisi last ni suradi.
+
+    shot — o'sha lahzadagi JPEG (bytes). Birinchi marta ko'ringanda saqlanadi,
+    keyin YANGILANMAYDI (keldi lahzasidagi kadr qoladi).
+    """
     now = when or time.time()
     day = datetime.date.fromtimestamp(now).isoformat()
     hhmm = datetime.datetime.fromtimestamp(now).strftime("%H:%M:%S")
@@ -72,8 +82,17 @@ def record(name, branch, camera, when=None):
         entry = data.get(name)
         changed = False
         if entry is None:
+            has_shot = False
+            if shot:
+                try:
+                    with open(_shot_path(day, name), "wb") as f:
+                        f.write(shot)
+                    has_shot = True
+                except OSError:
+                    pass
             data[name] = {"first": hhmm, "last": hhmm,
-                          "first_cam": where, "last_cam": where, "seen": 1}
+                          "first_cam": where, "last_cam": where, "seen": 1,
+                          "shot": has_shot}
             changed = True
         else:
             entry["seen"] += 1

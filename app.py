@@ -17,6 +17,7 @@ Muhim: detektor JARIMA QO'YMAYDI. U nomzod hodisa ko'rsatadi, qarorni
 auditor qabul qiladi — noto'g'ri jarima yo'q signaldan qimmatroq.
 """
 import io
+import os
 import time
 import threading
 from collections import deque
@@ -185,9 +186,12 @@ def analyzer():
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
 
-        for f in found:
-            if f["name"]:
-                attendance.record(f["name"], branch, cam.name)
+        if any(f["name"] for f in found):
+            ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            shot = jpg.tobytes() if ok else None
+            for f in found:
+                if f["name"]:
+                    attendance.record(f["name"], branch, cam.name, shot=shot)
 
         ctx = detectors.Context(branch=branch, channel=cam.channel,
                                 camera_name=cam.name, faces=found, persons=persons)
@@ -341,6 +345,8 @@ PAGE = r"""
  table.att tr:last-child td{border:0}
  table.att td.t{font-variant-numeric:tabular-nums;font-size:15px}
  .att-cam{color:var(--dim);font-size:11px}
+ .attshot{width:56px;height:42px;object-fit:cover;border-radius:6px;
+   cursor:pointer;background:#0b0908;display:block}
  /* ── xodimlar ── */
  .staffwrap{display:grid;grid-template-columns:380px 1fr;gap:24px;align-items:start}
  @media(max-width:900px){.staffwrap{grid-template-columns:1fr}}
@@ -566,9 +572,10 @@ async function loadAtt(){
       : `<option>${d.date}</option>`;
   }
   document.getElementById("atttable").innerHTML = d.rows.length ? `
-    <table class=att><tr><th>Xodim</th><th>Keldi</th><th>Ketdi</th>
+    <table class=att><tr><th></th><th>Xodim</th><th>Keldi</th><th>Ketdi</th>
       <th>Kamera</th><th></th></tr>
     ${d.rows.map(r=>`<tr>
+      <td>${r.shot?`<img class=attshot src="/attendance/shot/${d.date}/${encodeURIComponent(r.name)}">`:""}</td>
       <td><b>${r.name}</b></td>
       <td class=t>${r.first.slice(0,5)}</td>
       <td class=t>${r.last.slice(0,5)}</td>
@@ -850,6 +857,14 @@ def still(branch, channel):
 
 
 # ── Xodimlarni ro'yxatga olish ───────────────────────────────────────
+@app.get("/attendance/shot/<date>/<path:name>")
+def attendance_shot(date, name):
+    p = attendance._shot_path(date, name)
+    if not os.path.exists(p):
+        return "yo'q", 404
+    return send_file(p, mimetype="image/jpeg")
+
+
 @app.get("/attendance")
 def attendance_get():
     """Kun davomati. ?date=YYYY-MM-DD — istalgan kun (standart: bugun)."""
