@@ -1,0 +1,26 @@
+{
+ "__SINOV__": {
+  "first": "00:01:46",
+  "last": "00:04:15",
+  "first_cam": "F/K2",
+  "last_cam": "F/K2",
+  "seen": 5,
+  "shot": false
+ },
+ "Diyor Raxmatullayev": {
+  "first": "13:07:19",
+  "last": "13:07:19",
+  "first_cam": "Yunusobod/Coworking 1",
+  "last_cam": "Yunusobod/Coworking 1",
+  "seen": 1,
+  "shot": true
+ },
+ "Abdurahim Salimov": {
+  "first": "13:49:22",
+  "last": "13:51:41",
+  "first_cam": "Yunusobod/Coworking 1",
+  "last_cam": "Yunusobod/B4",
+  "seen": 14,
+  "shot": true
+ }
+}

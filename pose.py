@@ -36,6 +36,21 @@ DETECT_CONF = 0.35      # pastroqda soxta topilma ko'payadi (0.25 da 16 ta chiqd
 # uchun detektor YOLG'IZ qo'shadigan topilma qattiqroq tekshiriladi:
 DETECT_ADD_CONF = 0.55      # detektor-only topilma shu ishonchdan yuqori bo'lsin
 DETECT_ADD_MIN_H = 120      # va shu bo'ydan katta (mayda obyekt odam emas)
+# ── Telefon (3.2) ────────────────────────────────────────────────────
+# COCO "cell phone" klassi — o'sha yolov8m o'tishida chiqadi, qo'shimcha
+# inference YO'Q. NVR 1080p'da telefon 15-25px, shuning uchun ishonch
+# odamnikidan pastroq; yolg'on topilma esa vaqt filtri (detectors) bilan
+# kesiladi, bu yerda emas.
+PHONE_CLASS = 67
+PHONE_CONF = 0.30
+PHONE_MIN_PX = 10           # bundan kichik quti shovqin
+PHONE_WRIST_MAX = 0.30      # telefon-bilak masofasi bo'yning shu ulushidan kam = qo'lda
+PHONE_BOX_PAD = 0.10        # qo'l odam qutisidan biroz chiqishi mumkin (eni ulushi)
+# SAHI (bo'lakli) rejimда mayda odamни ATAYIN topamiz — shuning uchun bo'y
+# chegarasi past. Soxta topilmalarни statik-filtr (qotган rasm) va ishonch
+# ushlaydi.
+SAHI_MIN_H = 34
+SAHI_SLICES = 3             # ~3x3 bo'lak
 IMGSZ = 960
 # Quti ishonchi ALDAMCHI — odam sanashda unga tayanib bo'lmaydi.
 # O'lchandi (B1, deraza oldida o'tirgan odam): quti ishonchi 0.05, ya'ni
@@ -154,6 +169,44 @@ def infer(frame):
     """Kadrni modeldan o'tkazadi. Natijani people() ga berish kerak."""
     m, dev = model()
     return m(frame, conf=CONF, imgsz=IMGSZ, device=dev, verbose=False)[0]
+
+
+_sahi = None
+
+
+def _sahi_model():
+    global _sahi
+    with _lock:
+        if _sahi is None:
+            from sahi import AutoDetectionModel
+            _, dev = detect_model()
+            _sahi = AutoDetectionModel.from_pretrained(
+                model_type="ultralytics", model_path=DETECT_MODEL,
+                confidence_threshold=DETECT_CONF, device=dev)
+        return _sahi
+
+
+def _sahi_boxes(frame):
+    """SAHI bo'lakli aniqlash — kadrни bo'laklarга bo'lib mayda odamни topadi.
+
+    Qaytaradi: [(x1,y1,x2,y2,conf), ...] faqat person.
+    """
+    from sahi.predict import get_sliced_prediction
+    h, w = frame.shape[:2]
+    sh = max(320, h // SAHI_SLICES)
+    sw = max(320, w // SAHI_SLICES)
+    res = get_sliced_prediction(
+        frame, _sahi_model(), slice_height=sh, slice_width=sw,
+        overlap_height_ratio=0.2, overlap_width_ratio=0.2,
+        postprocess_type="GREEDYNMM", postprocess_match_metric="IOS",
+        postprocess_match_threshold=0.5, verbose=0)
+    out = []
+    for o in res.object_prediction_list:
+        if o.category.name == "person":
+            b = o.bbox
+            out.append((int(b.minx), int(b.miny), int(b.maxx), int(b.maxy),
+                        float(o.score.value)))
+    return out
 
 
 def _neck(k):
@@ -358,32 +411,103 @@ MERGE_IOU = 0.30        # detektor qutisi pose odamiga shuncha tegsa — o'sha o
 MERGE_INSIDE = 0.50
 
 
-def people_in(frame):
+def people_in(frame, sliced=False):
     """Kadrdagi odamlar — pose va odam-detektori birgalikda.
 
-    Avval pose (u bo'g'imlarni ham beradi, holat shundan o'qiladi), keyin
-    detektor topgan va pose o'tkazib yuborgan odamlar qo'shiladi. Bunday
-    odamning holati o'qilmaydi (bo'g'imi yo'q), lekin SANALADI.
+    Avval pose (bo'g'imlar + holat), keyin detektor topgan va pose o'tkazib
+    yuborgan odamlar qo'shiladi (holati o'qilmaydi, lekin SANALADI).
+
+    sliced=True — detektor o'rniga SAHI (bo'lakli) ishlatiladi: uzoq/mayda
+    odamни ham topadi. Sekinroq, shuning uchun faqat OCHILGAN kamerada.
     """
     found = people(infer(frame))
-    m, dev = detect_model()
-    res = m(frame, conf=DETECT_CONF, imgsz=IMGSZ, classes=[0],
-            device=dev, verbose=False)[0]
-    for box in res.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
+    phones = []
+    if sliced:
+        det_boxes = _sahi_boxes(frame)
+        min_h = SAHI_MIN_H
+        # SAHI odamni topadi, telefonni emas — alohida yengil o'tish
+        m, dev = detect_model()
+        res = m(frame, conf=PHONE_CONF, imgsz=IMGSZ, classes=[PHONE_CLASS],
+                device=dev, verbose=False)[0]
+        phones = _phone_boxes(res)
+    else:
+        m, dev = detect_model()
+        # Odam (0) va telefon (67) BITTA o'tishda — min conf telefonniki,
+        # odam uchun o'z chegarasi pastda qo'llanadi.
+        res = m(frame, conf=min(DETECT_CONF, PHONE_CONF), imgsz=IMGSZ,
+                classes=[0, PHONE_CLASS], device=dev, verbose=False)[0]
+        det_boxes = [(*map(int, box.xyxy[0]), float(box.conf[0]))
+                     for box in res.boxes
+                     if int(box.cls[0]) == 0 and float(box.conf[0]) >= DETECT_CONF]
+        phones = _phone_boxes(res)
+        min_h = DETECT_ADD_MIN_H
+    for x1, y1, x2, y2, conf in det_boxes:
         b = (x1, y1, x2, y2)
-        # Detektor-only topilma: ishonch va o'lcham qattiqroq — pose
-        # tasdiqlamagani uchun bank/stul/soyani odam deb qo'shmaslik kerak.
-        if float(box.conf[0]) < DETECT_ADD_CONF or (y2 - y1) < DETECT_ADD_MIN_H:
+        # Detektor-only topilma: ishonch va o'lcham gate — pose tasdiqlamagani
+        # uchun bank/stul/soyani odam deb qo'shmaslik kerak. Qotган rasm/murol
+        # esa keyin static_filter'da chiqariladi.
+        if conf < DETECT_ADD_CONF or (y2 - y1) < min_h:
             continue
         if any(_iou(b, p["box"]) >= MERGE_IOU or _inside(b, p["box"]) >= MERGE_INSIDE
                for p in found):
             continue
         found.append({
-            "box": b, "height": y2 - y1, "conf": float(box.conf[0]),
+            "box": b, "height": y2 - y1, "conf": conf,
             "keypoints": None, "strong": 0, "neck": None,
             "reliable": False,        # bo'g'im yo'q — holat o'qilmaydi
             "seated": None, "head_down": None,
-            "source": "detector",
+            "source": "sahi" if sliced else "detector",
         })
+    _attach_phones(found, phones)
     return found
+
+
+def _phone_boxes(res):
+    """YOLO natijasidan telefon qutilari [(x1,y1,x2,y2,conf)]."""
+    out = []
+    for box in res.boxes:
+        if int(box.cls[0]) != PHONE_CLASS or float(box.conf[0]) < PHONE_CONF:
+            continue
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        if min(x2 - x1, y2 - y1) < PHONE_MIN_PX:
+            continue
+        out.append((x1, y1, x2, y2, float(box.conf[0])))
+    return out
+
+
+def _attach_phones(persons, phones):
+    """Har telefonni QO'LIDA ushlab turgan odamga bog'laydi: p["phone"].
+
+    Stolda yotgan telefon hodisa emas (3.2 "foydalanish" haqida), shuning
+    uchun bog'lanmagan telefon tashlab yuboriladi. Qo'lda ekani:
+      - bo'g'imli odam: telefon markazi bilakka yaqin (bo'yga nisbatan);
+      - bo'g'imsiz odam (detektor-only): markaz qutining yuqori 60% ida.
+    Bir telefon — bitta odam (eng yaqini). Bir odamda ko'pi bilan bitta.
+    """
+    for p in persons:
+        p["phone"] = None
+    for x1, y1, x2, y2, conf in phones:
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        best, best_d = None, None
+        for p in persons:
+            px1, py1, px2, py2 = p["box"]
+            pad = (px2 - px1) * PHONE_BOX_PAD
+            if not (px1 - pad <= cx <= px2 + pad and py1 <= cy <= py2):
+                continue
+            h = max(1, p["height"])
+            k = p.get("keypoints")
+            wrists = [k[i] for i in (L_WR, R_WR)] if k else []
+            wrists = [w for w in wrists if w[2] >= KP_CONF]
+            if wrists:
+                d = min(((w[0] - cx) ** 2 + (w[1] - cy) ** 2) ** 0.5 for w in wrists) / h
+                if d > PHONE_WRIST_MAX:
+                    continue
+            else:
+                if cy > py1 + 0.6 * (py2 - py1):
+                    continue
+                d = 1.0                     # bilak yo'q — zaif bog'lanish
+            if best_d is None or d < best_d:
+                best, best_d = p, d
+        if best is not None and best["phone"] is None:
+            best["phone"] = {"box": (x1, y1, x2, y2), "conf": conf,
+                             "wrist": None if best_d >= 1.0 else round(best_d, 3)}

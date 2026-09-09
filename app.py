@@ -18,6 +18,7 @@ auditor qabul qiladi — noto'g'ri jarima yo'q signaldan qimmatroq.
 """
 import io
 import os
+import json
 import time
 import threading
 from collections import deque
@@ -30,8 +31,14 @@ from flask import (Flask, Response, jsonify, render_template_string,
 import attendance
 import nvr
 import tracker
+import static_filter
+
+SLICED_ON = os.environ.get("SAHI") == "1"   # SAHI (bo'lakli sanoq) — sekin, default off
 import rules
-import faces
+if os.environ.get("FACE_ENGINE", "arcface") == "arcface":
+    import arcface as faces      # ArcFace (InsightFace) — burchakka chidamli
+else:
+    import faces                 # eski SFace
 import pose
 import detectors
 
@@ -84,6 +91,14 @@ def draw(frame, state):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
             cv2.putText(frame, "bosh pastda", (x1, max(18, y1 - 8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    for p in state.get("persons", []):
+        ph = p.get("phone")
+        if not ph:
+            continue
+        x1, y1, x2, y2 = ph["box"]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
+        cv2.putText(frame, "telefon", (x1, max(18, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
     for i, ev in enumerate(state.get("events", [])[:3]):
         cv2.putText(frame, f"{ev['rule_number']} {ev['rule_type']}",
                     (20, 40 + i * 32), cv2.FONT_HERSHEY_SIMPLEX,
@@ -107,6 +122,68 @@ print("Modellar tayyor.")
 nvr.build()                      # filiallarni yaratadi va ishga tushiradi
 CAMERAS = nvr.all_cameras()      # {'Filial/kanal': Camera}
 _last_analyzed = {}
+_track_names = {}      # {cam_key: {tid: {name, box, score}}} — trekни BIR MARTA tanib keshlaymiz
+_last_face = {}        # {cam_key: vaqt} — yuz qidirishni kamerada 1s da bir cheklaymiz
+FACE_INTERVAL = 1.0
+# ── INTERN sariq bejik nazorati ──────────────────────────────────────
+BADGE_YELLOW_MIN = 0.04    # bo'yin sohasida sariq ulush shundan kam = bejik yo'q
+                           # (o'lchandi: bejikli intern 0.123, bejiksiz ~0)
+_badge_warned = {"date": None, "names": set()}   # kuniga BIR MARTA ogohlantirish
+_intern_cache = {"mtime": None, "set": set()}
+
+
+def _interns():
+    """meta.json dan rol=intern bo'lgan ismlar (mtime bo'yicha keshlanadi)."""
+    path = getattr(faces, "META_DB", None)
+    if not path or not os.path.exists(path):
+        return set()
+    mt = os.path.getmtime(path)
+    if _intern_cache["mtime"] != mt:
+        try:
+            meta = json.load(open(path))
+        except Exception:
+            meta = {}
+        _intern_cache["mtime"] = mt
+        _intern_cache["set"] = {n for n, e in meta.items()
+                                if isinstance(e, dict) and e.get("role") == "intern"}
+    return _intern_cache["set"]
+
+
+def _neck_yellow(frame, box):
+    """Yuz tagidagi bo'yin/ko'krak sohasida sariq (bejik) ulushi."""
+    x, y, w, h = box
+    H, W = frame.shape[:2]
+    nx1, nx2 = max(0, int(x - 0.3 * w)), min(W, int(x + 1.3 * w))
+    ny1, ny2 = min(H, y + h), min(H, y + h + int(2.2 * h))
+    reg = frame[ny1:ny2, nx1:nx2]
+    if reg.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(reg, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (18, 80, 80), (38, 255, 255))
+    return float(mask.mean() / 255)
+
+
+def _badge_events(frame, found):
+    """Intern tanilса va sariq bejik yo'q bo'lса — kuniga BIR MARTA hodisa."""
+    interns = _interns()
+    if not interns:
+        return []
+    today = time.strftime("%Y-%m-%d")
+    if _badge_warned["date"] != today:
+        _badge_warned.update(date=today, names=set())
+    out = []
+    for f in found:
+        name = f.get("name")
+        if name in interns and name not in _badge_warned["names"]:
+            if _neck_yellow(frame, f["box"]) < BADGE_YELLOW_MIN:
+                _badge_warned["names"].add(name)
+                out.append({
+                    "rule_number": "LOKAL", "rule_id": None, "rule_text": "",
+                    "rule_type": "info", "score": 0, "who": name,
+                    "reason": "Sariq bejik taqilmagan",
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "detector": "badge"})
+    return out
 
 
 def analyzer():
@@ -171,17 +248,46 @@ def analyzer():
 
         branch = cam.branch.name
         try:
-            persons = pose.people_in(frame)
+            # Ochilgan (fokus) kamerada SAHI — mayda/uzoq odamни ham topadi.
+            # LEKIN SAHI 1080p'da sekin (9 bo'lak) va analizatorни band qilib
+            # kamerani QOTIRADI hamda yuz tanishni to'xtatadi. Shuning uchun
+            # default O'CHIQ; kerak bo'lganda SAHI=1 bilan yoqiladi.
+            sliced = SLICED_ON and cam is watched_cam
+            persons = pose.people_in(frame, sliced=sliced)
+            # Qotgan topilmalarni (devor rasmi/murol/plakat) chiqaramiz
+            persons = static_filter.update_and_filter(cam.key, frame, persons)
             # Kuzatuv: raqam kadrdan kadrga barqaror qolsin, son jimirlamasin
             persons = tracker.get(cam.key).update(persons)
-            # Yuz qidirish eng qimmat qadam (138 ms). Xonada odam bo'lmasa
-            # qidirishning ma'nosi yo'q — bo'sh xonalarda bekorga sarflanardi.
-            #
-            # Shart ODAM BORLIGIGA bog'liq, "holati o'qiladimi" ga emas:
-            # yaqindan turgan odamning qutisi kadr chetiga tegadi va
-            # reliable=False bo'ladi — Mac kamerasida aynan shu sababli yuz
-            # umuman qidirilmasdi.
-            found = faces.identify(frame, branch=branch) if persons else []
+            # YUZ TANISH — har trekni BIR MARTA (ArcFace 247ms har kadr emas,
+            # aks holda kamera QOTADI). Nomni trek raqamiga keshlaymiz; yuz
+            # qidirish kamerada 1s da bir marta (throttle). Ketgan trek keshdan
+            # o'chadi. found har kadr keshdan tiklanadi (attendance/detektorlar
+            # o'zgarmaydi). Raqam EMAS, ISM ko'rsatiladi.
+            names = _track_names.setdefault(cam.key, {})
+            active = {p["tid"] for p in persons if "tid" in p}
+            for tid in list(names):
+                if tid not in active:
+                    del names[tid]
+            if persons and time.time() - _last_face.get(cam.key, 0) >= FACE_INTERVAL:
+                _last_face[cam.key] = time.time()
+                for f in faces.identify(frame, branch=branch):
+                    if not f["name"]:
+                        continue
+                    fx = f["box"][0] + f["box"][2] / 2
+                    fy = f["box"][1] + f["box"][3] / 2
+                    for p in persons:
+                        x1, y1, x2, y2 = p["box"]
+                        if x1 <= fx <= x2 and y1 <= fy <= y2 and "tid" in p:
+                            names[p["tid"]] = {"name": f["name"], "box": f["box"],
+                                               "score": f["score"]}
+                            break
+            found = []
+            for p in persons:
+                c = names.get(p.get("tid"))
+                p["name"] = c["name"] if c else None
+                if c:
+                    found.append({"box": c["box"], "name": c["name"],
+                                  "score": c["score"], "too_small": False})
         except Exception as e:
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
@@ -196,6 +302,8 @@ def analyzer():
         ctx = detectors.Context(branch=branch, channel=cam.channel,
                                 camera_name=cam.name, faces=found, persons=persons)
         events = detectors.run(ctx)
+        # Intern sariq bejik nazorati (5001 hodisaga bir marta)
+        events += _badge_events(frame, found)
 
         h, w = frame.shape[:2]
         # Ramkalar FOIZDA saqlanadi: brauzer rasmni istalgan o'lchamda
@@ -206,9 +314,16 @@ def analyzer():
                   "y": round(100 * p["box"][1] / h, 2),
                   "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
                   "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
-                  "label": str(p.get("tid", i)),
+                  "label": p.get("name") or "",
                   "kind": "alert" if (p["reliable"] and p["head_down"]) else "person"}
                  for i, p in enumerate(persons, 1)]
+        # Telefon ramkasi — faqat qo'lda deb bog'langan telefon (3.2 nomzodi)
+        boxes += [{"x": round(100 * p["phone"]["box"][0] / w, 2),
+                   "y": round(100 * p["phone"]["box"][1] / h, 2),
+                   "w": round(100 * (p["phone"]["box"][2] - p["phone"]["box"][0]) / w, 2),
+                   "h": round(100 * (p["phone"]["box"][3] - p["phone"]["box"][1]) / h, 2),
+                   "label": "telefon", "kind": "phone"}
+                  for p in persons if p.get("phone")]
         # Yuz ramkasi FAQAT kim ekani aniqlanganda. Tanib bo'lmaydigan
         # kichik yuzlarga ramka chizish ekranni bekorga to'ldiradi.
         boxes += [{"x": round(100 * f["box"][0] / w, 2),
@@ -329,6 +444,7 @@ PAGE = r"""
  .ov.person{border-color:var(--accent)} .ov.person span{background:var(--accent)}
  .ov.face{border-color:#60a5fa} .ov.face span{background:#60a5fa}
  .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
+ .ov.phone{border-color:#fbbf24} .ov.phone span{background:#fbbf24;color:#111}
  #bigbar{color:var(--fg);display:flex;gap:14px;align-items:center;font-size:14px}
  #bigcount{font-size:22px}
  #bigtop{min-height:44px;display:flex;gap:10px;align-items:center;
@@ -370,6 +486,10 @@ PAGE = r"""
    padding:11px 14px;border-bottom:1px solid var(--line);font-size:14px}
  .prow:last-child{border:0}
  .prow .n{flex:1;font-weight:500} .prow .s{color:var(--dim);font-size:12px}
+ .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;
+     border:1px solid var(--line)}
+ .av.ph{display:flex;align-items:center;justify-content:center;
+     background:var(--card);color:var(--dim);font-weight:600;font-size:15px}
  .prow button{padding:4px 11px;font-size:12px;background:transparent;
    border:1px solid var(--line);color:var(--dim);border-radius:6px;cursor:pointer}
  .prow button:hover{border-color:#a05a5a;color:#e0a8a8}
@@ -529,8 +649,10 @@ async function frameLoop(br, ch, gen){
         const top=document.getElementById("bigtop");
         if(m.named && m.named.length)
           top.innerHTML=m.named.map(n=>`<span class="faceb ok">✓ ${n}</span>`).join("");
-        else if(m.face_px>=25)
+        else if(m.face_px>=25 && m.face_px<45)
           top.innerHTML=`<span class="faceb small">Yuz topildi (${m.face_px}px) — tanish uchun yaqinroq keling</span>`;
+        else if(m.face_px>=45)
+          top.innerHTML=`<span class="faceb small">Yuz topildi (${m.face_px}px) — tanilmadi (bazada yo'q yoki yuz burchagi mos emas)</span>`;
         else top.innerHTML="";
       }catch(e){}
     }catch(e){ await new Promise(s=>setTimeout(s,400)); }
@@ -600,6 +722,7 @@ async function loadSources(){
 async function loadPeople(){
   loadSources();
   const d=await (await fetch("/faces")).json();
+  window.ENROLL_TARGET=d.target||14;
   const box=document.getElementById("pwarn");
   if(d.problems.length){
     const items=d.problems.map(p=> p.type==="duplicate"
@@ -607,17 +730,24 @@ async function loadPeople(){
       : `${p.name}: namunalar aralashgan (${p.samples} ta)`).join("<br>");
     box.innerHTML=`<details class=warn><summary>${d.problems.length} ta muammo — bazani tekshiring</summary><div>${items}</div></details>`;
   } else box.innerHTML="";
-  document.getElementById("plist").innerHTML = d.people.map((p,i)=>`
-    <div class=prow><span class=n>${p.name}</span>
+  document.getElementById("plist").innerHTML = d.people.map((p,i)=>{
+    const nm=p.name.replace(/"/g,"&quot;");
+    const av=p.thumb
+      ? `<img class=av src="/faces/thumb/${encodeURIComponent(p.name)}" alt="">`
+      : `<span class="av ph">${(p.name.trim()[0]||"?").toUpperCase()}</span>`;
+    return `<div class=prow>${av}<span class=n>${p.name}</span>
       <span class=s>${p.samples} namuna</span>
-      <button class=del data-name="${p.name.replace(/"/g,"&quot;")}"
+      <button class=del data-name="${nm}"
         onclick="askDel(this)">O'chirish</button>
-    </div>`).join("") || "<div class=empty>Bazada xodim yo'q</div>";
+    </div>`;
+  }).join("") || "<div class=empty>Bazada xodim yo'q</div>";
 }
 function say(t,ok){ const m=document.getElementById("msg");
   m.textContent=t; m.className=ok?"ok":"err"; }
-const STEPS=[["To'g'riga qarang",3],["Sekin CHAPGA buring",3],
-             ["Sekin O'NGGA buring",3],["Biroz YUQORIGA",2],["Biroz PASTGA",2]];
+// ── Face ID uslubidagi ro'yxatga olish ──────────────────────────────
+// Server HAR kadrni sifat + XILMA-XILLIK bo'yicha baholaydi; biz uzluksiz
+// kadr yuboramiz, u faqat sifatli va YANGI burchakni saqlaydi. Yetarli
+// (done) bo'lguncha davom etadi — "aniq yozib olmaguncha".
 let camStream=null;
 async function openCam(){
   if(!camStream) camStream=await navigator.mediaDevices.getUserMedia(
@@ -633,84 +763,88 @@ function grab(v){
   c.getContext("2d").drawImage(v,0,0);
   return new Promise(r=>c.toBlob(r,"image/jpeg",0.92));
 }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+// Harakatga undash uchun aylanma maslahat (Face ID doirasi kabi)
+const HINTS=["Yuzni to‘g‘riga tuting","Sekin CHAPGA buring",
+  "Sekin O‘NGGA buring","Biroz TEPAGA","Biroz PASTGA"];
+let enrollBusy=false;
 async function addFace(){
   const name=document.getElementById("pname").value.trim();
   if(!name){ say("Ismni yozing", false); return; }
+  if(enrollBusy){ enrollBusy=false; return; }   // ikkinchi bosish — to‘xtat
   const src=document.getElementById("psrc").value;
-  if(src!=="mac"){ return addFaceFromNvr(name, src); }
-  const btn=document.getElementById("addbtn");
-  const vid=document.getElementById("preview"), bar=document.getElementById("bar");
-  const step=document.getElementById("step"), fill=bar.querySelector("i");
-  btn.disabled=true; say("", true);
-  try{
-    vid.srcObject=await openCam(); vid.style.display="block"; bar.style.display="block";
-    await new Promise(r=>{ if(vid.videoWidth) r(); else vid.onloadedmetadata=r; });
-  }catch(e){ btn.disabled=false; say("Kameraga ruxsat berilmadi: "+e.message, false); return; }
-  const total=STEPS.reduce((a,s)=>a+s[1],0);
-  let done=0, saved=0, skipped=0, lastErr="";
-  for(const [text,shots] of STEPS){
-    step.textContent=text;
-    await new Promise(s=>setTimeout(s,1300));
-    for(let i=0;i<shots;i++){
+  const vid=document.getElementById("preview");
+  const nimg=document.getElementById("npreview");
+  let sender;
+  if(src==="mac"){
+    try{
+      vid.srcObject=await openCam(); vid.style.display="block";
+      await new Promise(r=>{ if(vid.videoWidth) r(); else vid.onloadedmetadata=r; });
+    }catch(e){ say("Kameraga ruxsat berilmadi: "+e.message, false); return; }
+    sender=async()=>{
       const blob=await grab(vid);
       const fd=new FormData(); fd.append("name",name); fd.append("image",blob,"f.jpg");
-      try{
-        const d=await (await fetch("/faces/image",{method:"POST",body:fd})).json();
-        if(d.ok) saved++; else { skipped++; lastErr=d.message; }
-      }catch(e){ skipped++; lastErr=e.message; }
-      done++; fill.style.width=(done/total*100)+"%";
-      step.textContent=text+"  ("+saved+" ta olindi)";
-      await new Promise(s=>setTimeout(s,420));
-    }
+      return (await fetch("/faces/sample",{method:"POST",body:fd})).json();
+    };
+  } else {
+    const [br, ch]=src.split("/");
+    nimg.style.display="block"; startNvrView(br,ch,nimg);
+    sender=async()=>(await fetch("/faces/sample",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,branch:br,channel:ch,branches:[br]})})).json();
   }
-  closeCam(); vid.srcObject=null; vid.style.display="none"; bar.style.display="none";
-  step.textContent=""; fill.style.width="0"; btn.disabled=false;
-  if(saved) say(name+": "+saved+" ta namuna saqlandi"+(skipped?" ("+skipped+" o'tkazildi)":""), true);
-  else say(lastErr || "Yuz olinmadi", false);
-  document.getElementById("pname").value = saved ? "" : name;
+  await enrollLoop(name, sender);
+  closeCam(); vid.srcObject=null; vid.style.display="none";
+  stopNvrView(); nimg.style.display="none"; nimg.removeAttribute("src");
   loadPeople();
 }
-async function addFaceFromNvr(name, src){
-  const [br, ch]=src.split("/");
+async function enrollLoop(name, sender){
   const btn=document.getElementById("addbtn"), bar=document.getElementById("bar");
   const step=document.getElementById("step"), fill=bar.querySelector("i");
-  const img=document.getElementById("npreview");
-  btn.disabled=true; bar.style.display="block"; img.style.display="block"; say("", true);
-  let alive=true, seq=-1;
+  const target=window.ENROLL_TARGET||14;
+  btn.disabled=false; btn.textContent="To‘xtatish";
+  enrollBusy=true; bar.style.display="block"; say("", true);
+  let count=0, done=false, stagnant=0, hintAt=0;
+  const t0=Date.now();
+  while(!done && enrollBusy && (Date.now()-t0)<90000){
+    let d;
+    try{ d=await sender(); }catch(e){ await sleep(300); continue; }
+    if(d.count>count){ count=d.count; stagnant=0; }
+    else stagnant++;
+    done=d.done;
+    fill.style.width=Math.min(100,count/target*100)+"%";
+    // Ko'rsatma: sifat past bo'lsa server sababi, aks holda aylanma maslahat
+    let hint=d.reason;
+    if(d.saved || !hint){
+      if(stagnant>2){ hintAt=(hintAt+1)%HINTS.length; stagnant=0; }
+      hint=HINTS[hintAt];
+    }
+    step.textContent=count+" / "+target+" sifatli namuna — "+hint;
+    await sleep(280);
+  }
+  bar.style.display="none"; step.textContent=""; fill.style.width="0";
+  btn.disabled=false; btn.textContent="Yuz olish"; enrollBusy=false;
+  if(done) say(name+": tayyor — "+count+" ta sifatli namuna olindi", true);
+  else if(count) say(name+": "+count+" ta namuna olindi (to‘xtatildi)", true);
+  else say("Yuz olinmadi — yorug‘ joyda, yaqinroq turing", false);
+  document.getElementById("pname").value = count ? "" : name;
+}
+// NVR ko'rinish oqimi (faqat ko'rsatish uchun; saqlash serverda kechadi)
+let nvrView=null;
+function startNvrView(br,ch,img){
+  let alive=true, seq=-1; nvrView=()=>{alive=false;};
   (async()=>{ while(alive){
     try{
       const r=await fetch(`/frame/${encodeURIComponent(br)}/${ch}?after=${seq}&big=1`);
       if(r.status===204) continue;
-      if(!r.ok){ await new Promise(s=>setTimeout(s,400)); continue; }
+      if(!r.ok){ await sleep(400); continue; }
       seq=+r.headers.get("X-Seq");
       const u=URL.createObjectURL(await r.blob());
       const old=img.src; img.src=u; if(old.startsWith("blob:")) URL.revokeObjectURL(old);
-    }catch(e){ await new Promise(s=>setTimeout(s,400)); }
+    }catch(e){ await sleep(400); }
   }})();
-  const total=STEPS.reduce((a,s)=>a+s[1],0);
-  let done=0, saved=0, skipped=0, lastErr="";
-  for(const [text,shots] of STEPS){
-    step.textContent=text;
-    await new Promise(s=>setTimeout(s,1600));
-    for(let i=0;i<shots;i++){
-      try{
-        const d=await (await fetch("/faces",{method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({name, branch:br, channel:ch, branches:[br]})})).json();
-        if(d.ok) saved++; else { skipped++; lastErr=d.message; }
-      }catch(e){ skipped++; lastErr=e.message; }
-      done++; fill.style.width=(done/total*100)+"%";
-      step.textContent=text+"  ("+saved+" ta olindi)";
-      await new Promise(s=>setTimeout(s,600));
-    }
-  }
-  alive=false; img.style.display="none"; img.removeAttribute("src");
-  bar.style.display="none"; step.textContent=""; fill.style.width="0"; btn.disabled=false;
-  if(saved) say(name+": "+saved+" ta namuna saqlandi"+(skipped?" ("+skipped+" o'tkazildi)":""), true);
-  else say(lastErr || "Yuz olinmadi", false);
-  document.getElementById("pname").value = saved ? "" : name;
-  loadPeople();
 }
+function stopNvrView(){ if(nvrView){ nvrView(); nvrView=null; } }
 let delArmed=null, delTimer=null;
 function askDel(btn){
   const name=btn.dataset.name;
@@ -879,6 +1013,7 @@ def faces_list():
     return jsonify(people=faces.people(), branches=list(nvr.BRANCHES),
                    min_px=faces.MIN_RECOGNIZE_PX,
                    enroll_px=faces.MIN_ENROLL_PX,
+                   target=faces.ENROLL_TARGET,
                    problems=faces.audit())
 
 
@@ -936,6 +1071,52 @@ def faces_add_image():
     ok, msg = faces.enroll(frame, name,
                            branches=branches.split(",") if branches else None)
     return jsonify(ok=ok, message=msg)
+
+
+@app.post("/faces/sample")
+def faces_sample():
+    """Face ID uslubi: bitta kadrni sifat va XILMA-XILLIK bo'yicha baholaydi.
+
+    Manba ikki xil: brauzer rasmi (Mac, multipart image) yoki NVR kamera
+    (json branch+channel). Har chaqiruv bitta kadr — saqlangani, yoki nega
+    saqlanmagani (yaqinroq kel / xira / boshni bur) qaytadi. Brauzer buni
+    uzluksiz chaqiradi va yetarli (done) bo'lguncha davom etadi.
+    """
+    name = (request.form.get("name") or "").strip()
+    branches = None
+    photo = request.files.get("image")
+    if photo is not None:
+        raw = np.frombuffer(photo.read(), np.uint8)
+        frame = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+        b = request.form.get("branches")
+        branches = b.split(",") if b else None
+    else:
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        cam = nvr.find(body.get("branch") or "Mac", body.get("channel") or "0")
+        if cam is None:
+            return jsonify(saved=False, done=False, count=0,
+                           reason="Kamera topilmadi"), 404
+        if hasattr(cam.branch, "want"):
+            cam.branch.want()
+        frame = cam.take_frame()
+        if frame is None:
+            data = cam.snapshot()
+            frame = cv2.imdecode(np.frombuffer(data, np.uint8),
+                                 cv2.IMREAD_COLOR)
+        branches = body.get("branches")
+    if frame is None:
+        return jsonify(saved=False, done=False, count=0,
+                       reason="Kadr olinmadi"), 503
+    return jsonify(faces.enroll_sample(frame, name, branches=branches))
+
+
+@app.get("/faces/thumb/<path:name>")
+def faces_thumb(name):
+    p = faces._thumb_path(name)
+    if not os.path.exists(p):
+        return "", 404
+    return send_file(p, mimetype="image/jpeg")
 
 
 @app.delete("/faces/<path:name>")

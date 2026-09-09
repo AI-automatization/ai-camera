@@ -17,6 +17,7 @@ Uch tamoyil:
 3) **Detektor jarima qo'ymaydi.** U faqat nomzod hodisa qaytaradi — odam
    ko'rib tasdiqlaydi. Avtomatik jarima qo'yish uchun rasm + odam qarori kerak.
 """
+import os
 import time
 import datetime
 import threading
@@ -81,6 +82,13 @@ SLEEP_MIN = 1.0           # 3.10/3.11: bosh shuncha vaqt pastda tursa
 # tanilmadi. Shundan past yuzda "kim ekani" savoliga javob YO'Q deymiz.
 MIN_FACE_PX = 60
 SEATED_SHARE = 0.7        # 2.10: mentor dars vaqtining shuncha qismini o'tirsa
+# 3.2: telefon qo'lda shuncha vaqt uzluksiz tursa. Qoida izohida qisqa
+# qo'ng'iroqqa (30s) ruxsat bor — undan uzunroq bo'lsin.
+PHONE_HOLD_SEC = 45
+# 3.2 qaysi zonalarda ishlaydi. Qoida DARS haqida (classroom + jadval).
+# Sinov uchun PHONE_ZONES="classroom,coworking" — coworkingda jadvalsiz.
+PHONE_ZONES = set(
+    os.environ.get("PHONE_ZONES", CLASSROOM).lower().replace(" ", "").split(","))
 COOLDOWN_SEC = 900        # bitta qoida bitta odamga shuncha vaqtda bir marta
 
 
@@ -437,6 +445,41 @@ class Sleeping(Detector):
         return []
 
 
+class PhoneInHand(Detector):
+    """3.2 — dars vaqtida telefondan foydalanmaslik.
+
+    pose._attach_phones telefonni qo'lida ushlagan odamga bog'laydi
+    (p["phone"]). Bu yerda faqat VAQT: bitta trek telefonni PHONE_HOLD_SEC
+    davomida qo'yib yubormasa — hodisa. Bir kadrdagi telefon (qo'ng'iroq,
+    xabarga qarash) signal emas. Stoldagi telefon umuman kelmaydi.
+    """
+
+    name = "phone_in_hand"
+    gap_tol = 15.0        # 1 kadr/sek atrofida; bir-ikki o'tkazib yuborish normal
+
+    def check(self, ctx):
+        if ctx.zone not in PHONE_ZONES:
+            return []
+        # Dars xonasida faqat dars vaqtida; coworking (sinov) jadvalsiz
+        if ctx.zone == CLASSROOM and ctx.lesson is None:
+            return []
+        now = ctx.now.timestamp()
+        events = []
+        for i, p in enumerate(ctx.persons):
+            key = f"{ctx.channel}:{p.get('tid', f'i{i}')}"
+            holding = bool(p.get("phone"))
+            seconds = self.streak.update(key, holding, now)
+            if not holding or seconds < PHONE_HOLD_SEC:
+                continue
+            who = p.get("name") or f"{ctx.camera_name} (tanilmagan)"
+            ev = self.event("3.2", who,
+                            f"{ctx.camera_name}: telefon {seconds:.0f} sekunddan "
+                            f"beri qo'lda", seconds, now=now)
+            if ev:
+                events.append(ev)
+        return events
+
+
 class MentorSeated(Detector):
     """2.10 — mentor darsni o'tirib o'tmasin."""
 
@@ -523,7 +566,7 @@ class Capacity(Detector):
 DETECTORS = [
     LessonStart(), LeftRoom(), AloneWithStudent(), AdminZoneLoitering(),
     LateArrival(), LessonOverrun(),
-    Sleeping(), MentorSeated(), CoworkingGathering(),
+    Sleeping(), MentorSeated(), CoworkingGathering(), PhoneInHand(),
     Capacity(),
 ]
 

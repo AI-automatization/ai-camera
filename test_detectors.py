@@ -216,6 +216,64 @@ def main():
     run("ro'yxatga olish chegarasi tanishnikidan qattiq",
         _f.MIN_ENROLL_PX > _f.MIN_RECOGNIZE_PX)
 
+    print("\n── 3.2 Telefon qo'lda")
+    import pose as _pz
+    # Bog'lash: telefon bilak yonida → qo'lda; stolda (odamdan tashqarida) → yo'q
+    kp = [[0, 0, 0.0]] * 17
+    kp[_pz.L_WR] = [40, 90, 0.9]           # chap bilak
+    holder = {"box": (0, 0, 80, 200), "height": 200, "keypoints": kp,
+              "reliable": True, "seated": None, "head_down": None}
+    other = {"box": (300, 0, 380, 200), "height": 200, "keypoints": None,
+             "reliable": False, "seated": None, "head_down": None}
+    _pz._attach_phones([holder, other], [(35, 85, 50, 100, 0.6),   # bilakda
+                                          (600, 300, 620, 320, 0.7)])  # stolda
+    run("bilak yonidagi telefon odamga bog'lanadi", holder["phone"] is not None)
+    run("stoldagi telefon hech kimga bog'lanmaydi", other["phone"] is None)
+    far = dict(holder, phone=None)
+    _pz._attach_phones([far], [(40, 190, 55, 200, 0.6)])        # bilakdan uzoq (oyoqda)
+    run("bilakdan uzoq telefon qo'lda emas", far["phone"] is None)
+    nokp = dict(other, phone=None)
+    _pz._attach_phones([nokp], [(330, 40, 345, 60, 0.6)])       # bo'g'imsiz, yuqori qism
+    run("bo'g'imsiz odamda yuqoridagi telefon bog'lanadi", nokp["phone"] is not None)
+
+    # Vaqt: coworking sinov rejimida (PHONE_ZONES) bir kadr signal emas, 45s dan keyin bor
+    _saved = detectors.PHONE_ZONES
+    detectors.PHONE_ZONES = {detectors.CLASSROOM, detectors.COWORKING}
+    try:
+        det = detectors.PhoneInHand()
+        t0 = datetime.datetime.now()
+        ph = {"box": (10, 10, 20, 20), "conf": 0.6, "wrist": 0.1}
+        fired = []
+        for sec in (0, 10, 20, 30, 40):
+            c = ctx("201", camera_name="Coworking 1",
+                    persons=[dict(person(), tid=7, phone=ph)],
+                    now=t0 + datetime.timedelta(seconds=sec))
+            fired += det.check(c)
+        run("45s gacha hodisa yo'q", fired == [])
+        c = ctx("201", camera_name="Coworking 1",
+                persons=[dict(person(), tid=7, phone=ph)],
+                now=t0 + datetime.timedelta(seconds=50))
+        fired += det.check(c)
+        run("45s dan keyin 3.2 hodisa", len(fired) == 1 and fired[0]["rule_number"] == "3.2")
+        # Telefonsiz odam — hech qachon
+        det2 = detectors.PhoneInHand()
+        r = []
+        for sec in (0, 30, 60, 90):
+            r += det2.check(ctx("201", camera_name="Coworking 1",
+                                persons=[dict(person(), tid=1, phone=None)],
+                                now=t0 + datetime.timedelta(seconds=sec)))
+        run("telefonsiz — hodisa yo'q", r == [])
+    finally:
+        detectors.PHONE_ZONES = _saved
+    # Standart rejim: coworking zonasi tegmaydi
+    det3 = detectors.PhoneInHand()
+    r3 = []
+    for sec in (0, 60, 120):
+        r3 += det3.check(ctx("201", camera_name="Coworking 1",
+                             persons=[dict(person(), tid=7, phone=ph)],
+                             now=t0 + datetime.timedelta(seconds=sec)))
+    run("standart rejimda coworking tegmaydi", r3 == [])
+
     print("\n── Sig'im qoidasi (mahalliy)")
     det=detectors.Capacity()
     t0=datetime.datetime.now()
@@ -243,14 +301,17 @@ def main():
     print("\n── Davomat")
     import os, time as _t, shutil as _sh, datetime as _dt
     import attendance as _att
-    _day=_dt.date.today().isoformat(); _p=_att._path(_day); _bak=None
+    # ALOHIDA (o'tmish) sanaga yozamiz — jonli ilova bugungi faylni yozsa ham
+    # to'qnashmasin. 09:00 + 3600 = 10:00, SHU kunда qoladi (yarim tundan o'tmaydi).
+    _fix="1990-01-01"; _p=_att._path(_fix); _bak=None
     if os.path.exists(_p): _bak=_p+".bak"; _sh.copy(_p,_bak)
+    _att._cache.update(date=None, data={}); _att._last_write.clear()
     try:
-        t0=_t.time()
+        t0=_dt.datetime.combine(_dt.date(1990,1,1), _dt.time(9,0)).timestamp()
         _att.record("__SINOV__","F","K1",when=t0)
         _att.record("__SINOV__","F","K1",when=t0+5)
         _att.record("__SINOV__","F","K2",when=t0+3600)
-        _,_data=_att.day()
+        _,_data=_att.day(_fix)
         e=_data.get("__SINOV__")
         run("birinchi ko'rinish = keldi", e is not None and e["first_cam"]=="F/K1")
         run("oxirgi ko'rinish = ketdi", e["last_cam"]=="F/K2" and e["first"]!=e["last"])

@@ -1,111 +1,89 @@
-"""Odam kuzatuvi — raqam kadrdan kadrga barqaror qolsin.
+"""Odam kuzatuvi — ByteTrack bilan (sanoat standarti).
 
-Muammo: pose har kadrni qaytadan sanaydi. Bitta odam bir kadrda topilib,
-keyingisida (bir lahza to'silса yoki egilса) topilmay qolishi mumkin —
-natijada son 3-4-5 orasida jimirlaydi va raqamlar almashadi.
+Ilgari o'zimiz yozgan IoU+velocity tracker bor edi; u tez yurgan odamда
+(220px/kadr, past fps) raqamни ALMASHTIRARDI (churn). ByteTrack — Kalman
+filtr + Hungarian moslash bilan — 300px/kadrда ham bitta ID ushlaydi
+(o'lchandi). Shuning uchun unga o'tildi.
 
-Yechim — oddiy IoU-tracker:
-  * har yangi quti oldingi kadr trekларига IoU bo'yicha moslashtiriladi;
-  * mos kelса — o'sha trek (o'sha RAQAM) saqlanadi, quti yangilanadi;
-  * mos kelmasa — yangi trek (yangi raqam);
-  * bir kadr topilmagan trek DARHOL o'chirilmaydi — MISS_TOLERANCE kadr
-    kutiladi (odam bir lahza to'silса raqami yo'qolmasin).
+ByteTrack faqat KUZATADI: unga bizning detektsiya (pose+detektor) qutilari
+beriladi, u har biriga barqaror ID (tid) qo'yadi. Odam aniqlash — YOLO,
+yuz tanish — ArcFace; ByteTrack ularга aloqasiz, alohida ish (sanoq/ID).
 
-Son = faol treklar soni. Bu jimirlashni yo'qotadi: bir kadrlik yo'qolish
-trekni o'chirmaydi.
-
-Har kamera uchun alohida Tracker. Holat kamera kalitiga bog'liq.
+Har kamera uchun alohida tracker (get(key)).
 """
-import time
 import threading
+from types import SimpleNamespace
+
+import numpy as np
+from ultralytics.trackers.byte_tracker import BYTETracker
 
 
-IOU_MATCH = 0.3         # quti oldingi trekка shundan ko'p tegsa — o'sha odam
-MISS_TOLERANCE = 8      # trek shuncha kadr topilmasa o'chadi
-MISS_SECONDS = 3.0      # yoki shuncha vaqt ko'rinmasa (kadr sekin kelса)
+def _args():
+    # track_buffer — yo'qolgan trek necha kadr saqlanadi (occlusion uchun).
+    # Past fps (~5) da 15 kadr ~3s: bir lahza to'silса ID saqlanadi, uzoq
+    # ketса o'chadi.
+    return SimpleNamespace(
+        track_high_thresh=0.25, track_low_thresh=0.1, new_track_thresh=0.25,
+        track_buffer=15, match_thresh=0.85, fuse_score=True)
 
 
-def _iou(a, b):
-    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
-    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
+class _Det:
+    """ByteTrack update() kutgan Results-like: xywh, conf, cls + bool-indeks."""
+
+    def __init__(self, xywh, conf, cls):
+        self.xywh = np.asarray(xywh, dtype=np.float32).reshape(-1, 4)
+        self.conf = np.asarray(conf, dtype=np.float32)
+        self.cls = np.asarray(cls, dtype=np.float32)
+
+    def __len__(self):
+        return len(self.conf)
+
+    def __getitem__(self, m):
+        return _Det(self.xywh[m], self.conf[m], self.cls[m])
+
+
+def _to_xywh(box):
+    x1, y1, x2, y2 = box
+    return [(x1 + x2) * 0.5, (y1 + y2) * 0.5, x2 - x1, y2 - y1]
 
 
 class Tracker:
-    """Bitta kameradagi odamlarni kuzatadi."""
+    """Bitta kameradagi odamlarni ByteTrack bilan kuzatadi."""
 
     def __init__(self):
-        self._tracks = {}      # id -> {box, misses, last_seen, person}
-        self._next = 1
+        self._bt = BYTETracker(_args())
         self._lock = threading.Lock()
 
     def update(self, persons, now=None):
-        """persons — pose.people_in() natijasi ({box, ...} lar).
+        """persons — pose.people_in() natijasi ({box, ...}).
 
-        Qaytaradi: har biriga barqaror "tid" (trek raqami) qo'shilgan ro'yxat.
-        Son = qaytgan ro'yxat uzunligi (faol treklar).
+        Har biriga barqaror "tid" qo'shadi. Qaytaradi: kuzatilayotgan
+        odamlar ro'yxati (tid bilan). Son = shu ro'yxat uzunligi.
         """
-        now = now or time.time()
         with self._lock:
-            unmatched = list(range(len(persons)))
-            # Har trekни eng mos yangi quti bilan bog'laymiz (kuchli IoU birinchi)
-            pairs = []
-            for tid, tr in self._tracks.items():
-                for i in unmatched:
-                    iou = _iou(tr["box"], persons[i]["box"])
-                    if iou >= IOU_MATCH:
-                        pairs.append((iou, tid, i))
-            pairs.sort(reverse=True)
-
-            taken_tid, taken_i = set(), set()
-            for iou, tid, i in pairs:
-                if tid in taken_tid or i in taken_i:
-                    continue
-                taken_tid.add(tid)
-                taken_i.add(i)
-                tr = self._tracks[tid]
-                tr["box"] = persons[i]["box"]
-                tr["person"] = persons[i]
-                tr["misses"] = 0
-                tr["last_seen"] = now
-                persons[i]["tid"] = tid
-
-            # Mos kelmagan yangi qutilar — yangi trek
-            for i in range(len(persons)):
-                if i in taken_i:
-                    continue
-                tid = self._next
-                self._next += 1
-                self._tracks[tid] = {"box": persons[i]["box"],
-                                     "person": persons[i], "misses": 0,
-                                     "last_seen": now}
-                persons[i]["tid"] = tid
-
-            # Bu kadrda topilmagan treklar — sabr, keyin o'chirish. Sabr
-            # ichida bo'lganlar RO'YXATGA QO'SHILADI: odam bir lahza to'silса
-            # ham raqami ekranda qoladi ("yo'qolguncha tursin").
-            ghosts = []
-            for tid in list(self._tracks):
-                if tid in taken_tid:
-                    continue
-                tr = self._tracks[tid]
-                tr["misses"] += 1
-                if tr["misses"] > MISS_TOLERANCE or now - tr["last_seen"] > MISS_SECONDS:
-                    del self._tracks[tid]
-                    continue
-                ghost = dict(tr["person"])
-                ghost["box"] = tr["box"]
-                ghost["tid"] = tid
-                ghost["ghost"] = True     # topilmadi, oxirgi joyida turibdi
-                ghosts.append(ghost)
-
-            return persons + ghosts
+            if not persons:
+                # bo'sh kadr — ByteTrack holatini yangilash uchun ham chaqiramiz
+                self._bt.update(_Det(np.zeros((0, 4)), np.zeros(0), np.zeros(0)))
+                return []
+            # Bizning odamlar allaqachon "tasdiqlangan" — hammasига yuqori
+            # ishonch beramiz (ByteTrack high/low ajratishida high bo'lsin).
+            xywh = [_to_xywh(p["box"]) for p in persons]
+            conf = [max(0.5, float(p.get("conf", 0.9))) for p in persons]
+            cls = [0.0] * len(persons)
+            out = self._bt.update(_Det(xywh, conf, cls))
+            tracked = []
+            for row in out:
+                # row: [x1,y1,x2,y2, track_id, conf, cls, det_idx]
+                idx = int(row[-1])
+                tid = int(row[4])
+                if 0 <= idx < len(persons):
+                    persons[idx]["tid"] = tid
+                    tracked.append(persons[idx])
+            return tracked
 
     def count(self):
         with self._lock:
-            return len(self._tracks)
+            return len([t for t in self._bt.tracked_stracks if t.is_activated])
 
 
 _trackers = {}

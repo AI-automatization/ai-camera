@@ -25,6 +25,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(_HERE, "models")
 DATA_DIR = os.path.join(_HERE, "data")
 FACE_DB = os.path.join(DATA_DIR, "faces.json")
+THUMB_DIR = os.path.join(DATA_DIR, "faces_thumbs")   # avatar rasmlar (ro'yxat uchun)
+os.makedirs(THUMB_DIR, exist_ok=True)
 META_DB = os.path.join(DATA_DIR, "meta.json")
 
 # SFace kosinus chegarasi. OpenCV ~0.36 tavsiya qiladi; 0.40 — biroz qattiqroq,
@@ -200,6 +202,14 @@ MIN_ENROLL_PX = 100     # ro'yxatga olishda yuz shundan katta bo'lsin
 # saqlash bazani shishiradi va tanishga hech narsa qo'shmaydi — foydasi
 # TURLI burchakdagi namunalarda. Shundan yuqori o'xshashlik = o'sha kadr.
 SAME_SAMPLE = 0.97
+# ── Face ID kabi qo'shish: sifat va xilma-xillik nazorati ────────────
+ENROLL_SHARP_MIN = 15      # yuz tiniqligi (Laplacian var) — faqat ANIQ xira
+                           # kadrni rad etadi; asosiy sifatni o'lcham+xilma-
+                           # xillik ta'minlaydi (juda qattiq bo'lsa hech tugamaydi)
+ENROLL_NEW_MAX = 0.92      # yangi namuna mavjuddan shu qadar farq qilsin
+                           # (0.92 dan yuqori = o'sha burchak, qo'shmaymiz)
+ENROLL_SAME_MIN = 0.30     # lekin butunlay boshqa odam bo'lmasin
+ENROLL_TARGET = 14         # shuncha xilma-xil sifatli namuna yetarli
 
 
 def people():
@@ -207,7 +217,8 @@ def people():
     db, meta = _load(FACE_DB), _load(META_DB)
     return sorted(
         ({"name": n, "samples": len(v),
-          "branches": meta.get(n, {}).get("filiallar", [])}
+          "branches": meta.get(n, {}).get("filiallar", []),
+          "thumb": has_thumb(n)}
          for n, v in db.items()),
         key=lambda p: p["name"])
 
@@ -238,6 +249,8 @@ def enroll(frame, name, branches=None):
                        f"Kameraga yaqinroq turing (kamida {MIN_ENROLL_PX}px)")
 
     emb = _unit(rec.feature(rec.alignCrop(frame, face)).flatten())
+    fx, fy, fw2, fh2 = (int(v) for v in face[:4])
+    _crop = frame[max(0, fy):fy + fh2, max(0, fx):fx + fw2]
 
     db = _load(FACE_DB)
     # Bu namuna allaqachon bormi (yuz qimirlamagan)
@@ -255,6 +268,8 @@ def enroll(frame, name, branches=None):
 
     db.setdefault(name, []).append(emb.tolist())
     _save(FACE_DB, db)
+    if not has_thumb(name) and _crop.size:
+        _save_thumb(name, _crop)
 
     meta = _load(META_DB)
     if branches:
@@ -276,6 +291,10 @@ def remove(name):
         return False, "Bunday xodim yo'q"
     del db[name]
     _save(FACE_DB, db)
+    try:
+        os.remove(_thumb_path(name))
+    except OSError:
+        pass
     meta = _load(META_DB)
     if name in meta:
         del meta[name]
@@ -320,3 +339,101 @@ def audit():
             problems.append({"type": "mixed", "name": n,
                              "samples": len(embs), "worst": round(worst, 2)})
     return problems
+
+
+# ── Avatar rasm (ro'yxatda ko'rsatish uchun) ─────────────────────────
+def _thumb_path(name):
+    safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in name)
+    return os.path.join(THUMB_DIR, f"{safe}.jpg")
+
+
+def has_thumb(name):
+    return os.path.exists(_thumb_path(name))
+
+
+def _save_thumb(name, crop):
+    """Yuz kirqimini ~200px avatar qilib saqlaydi (mavjud bo'lsa yozmaydi)."""
+    try:
+        h, w = crop.shape[:2]
+        side = min(h, w)
+        y0, x0 = (h - side) // 2, (w - side) // 2
+        sq = crop[y0:y0 + side, x0:x0 + side]
+        sq = cv2.resize(sq, (200, 200), interpolation=cv2.INTER_AREA)
+        cv2.imwrite(_thumb_path(name), sq, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    except Exception:
+        pass
+
+
+# ── Face ID uslubidagi ro'yxatga olish ───────────────────────────────
+def _sharpness(gray):
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def assess(frame):
+    """Kadrdagi eng katta yuzni baholaydi (saqlamaydi).
+
+    Qaytaradi: {ok, reason, px, sharp, emb}. ok=False bo'lsa reason nima
+    yetishmayotganini aytadi — brauzer foydalanuvchiga ko'rsatadi.
+    """
+    det, rec = _models()
+    h, w = frame.shape[:2]
+    det.setInputSize((w, h))
+    _, found = det.detect(frame)
+    if found is None or len(found) == 0:
+        return {"ok": False, "reason": "Yuz ko'rinmayapti", "px": 0}
+    face = max(found, key=lambda f: f[2] * f[3])
+    px = int(face[2])
+    if px < MIN_ENROLL_PX:
+        return {"ok": False, "reason": f"Yaqinroq keling ({px}px)", "px": px}
+    x, y, fw, fh = (int(v) for v in face[:4])
+    crop = frame[max(0, y):y + fh, max(0, x):x + fw]
+    if crop.size == 0:
+        return {"ok": False, "reason": "Yuz kadr chetida", "px": px}
+    sharp = _sharpness(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
+    if sharp < ENROLL_SHARP_MIN:
+        return {"ok": False, "reason": "Xira — sekinroq harakatlaning",
+                "px": px, "sharp": round(sharp)}
+    emb = _unit(rec.feature(rec.alignCrop(frame, face)).flatten())
+    return {"ok": True, "reason": "", "px": px, "sharp": round(sharp),
+            "emb": emb, "crop": crop}
+
+
+def enroll_sample(frame, name, branches=None):
+    """Bitta kadrni sifat va XILMA-XILLIK bo'yicha tekshirib saqlaydi.
+
+    Face ID kabi: sifatsiz yoki allaqachon olingan burchakni RAD etadi,
+    faqat yangi, sifatli namunani qo'shadi.
+
+    Qaytaradi: {saved, done, count, reason} — count: shu odamda nechta
+    namuna bor, done: yetarli (ENROLL_TARGET) bo'ldimi.
+    """
+    name = (name or "").strip()
+    if not name:
+        return {"saved": False, "done": False, "count": 0, "reason": "Ism yo'q"}
+    a = assess(frame)
+    db = _load(FACE_DB)
+    have = db.get(name, [])
+    if not a["ok"]:
+        return {"saved": False, "done": len(have) >= ENROLL_TARGET,
+                "count": len(have), "reason": a["reason"], "px": a.get("px", 0)}
+    emb = a["emb"]
+    # Mavjud namunalarga o'xshashlik: juda o'xshasa — o'sha burchak, qo'shmaymiz
+    if have:
+        top = max(float(np.dot(_unit(e), emb)) for e in have)
+        if top >= ENROLL_NEW_MAX:
+            return {"saved": False, "done": len(have) >= ENROLL_TARGET,
+                    "count": len(have), "reason": "Boshni biroz buring",
+                    "px": a["px"]}
+    db.setdefault(name, []).append(emb.tolist())
+    _save(FACE_DB, db)
+    if not has_thumb(name):          # birinchi (odatda frontal) namuna = avatar
+        _save_thumb(name, a["crop"])
+    if branches:
+        meta = _load(META_DB)
+        e = meta.setdefault(name, {})
+        e["filiallar"] = sorted(set(e.get("filiallar", [])) | set(branches))
+        _save(META_DB, meta)
+    _db_cache["mtime"] = None
+    n = len(db[name])
+    return {"saved": True, "done": n >= ENROLL_TARGET, "count": n,
+            "reason": "", "px": a["px"]}

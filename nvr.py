@@ -463,6 +463,12 @@ def build():
     """ENABLED dagi filiallarni yaratadi va ishga tushiradi."""
     for name in ENABLED:
         BRANCHES[name] = Branch(name, BRANCH_HOSTS[name], BRANCH_CAMERAS[name])
+    if os.environ.get("TESTCAM", "1") != "0":
+        _nash = "https://www.earthcam.com/usa/tennessee/nashville/?cam=nashville"
+        BRANCHES["Test"] = WebBranch(
+            "Test",
+            lambda br: HlsCamera(br, _earthcam_resolver(_nash),
+                                 "Nashville Broadway (jonli)"))
     if os.environ.get("MAC_CAMERA_OFF") != "1":
         mac = LocalBranch()
         # ATTENDANCE_MODE=1 bo'lsa kamera doim yoqiq (davomat brauzersiz ham
@@ -656,3 +662,174 @@ class LocalBranch:
     def request_scan(self):
         self.want()
         self.scanned_at = time.time()
+
+
+# ── Ommaviy test kamerasi (Abbey Road, EarthCam) ─────────────────────
+# Ofisda kamera bo'lmaganda sanoqni HAQIQIY, ATAYIN OCHIQ ommaviy kamerada
+# sinash uchun. Abbey Road o'tish joyi (London) — mashhur, qonuniy jonli
+# kamera; EarthCam sekin yangilanadigan JPEG frame beradi (aynan bizning
+# Hikvision snapshot kabi). O'lchami kichik (540x302) — piyodalar mayda,
+# shuning uchun sanoq mukammal bo'lmaydi, lekin butun quvur (grab → sanoq
+# → tracker → ko'rsatish) jonli ommaviy oqimda ishlashini sinaydi.
+_ABBEY_PAGE = "https://www.abbeyroad.com/crossing"
+_ABBEY_RE = re.compile(
+    r"https://static\.earthcam\.com/hof/england/abbeyroad/external/med/"
+    r"[0-9_]+_med\.jpg")
+_UA = {"User-Agent": "Mozilla/5.0"}
+
+
+def _abbey_frame():
+    """Abbey Road sahifasidan eng oxirgi frame JPEG baytlarini oladi."""
+    html = requests.get(_ABBEY_PAGE, headers=_UA, timeout=12).text
+    urls = _ABBEY_RE.findall(html)
+    if not urls:
+        return None
+    return requests.get(urls[-1], headers=_UA, timeout=12).content
+
+
+class WebCamera(LocalCamera):
+    """URL'dan JPEG oladigan kamera — LocalCamera bilan bir xil interfeys."""
+
+    def __init__(self, branch, resolver, name, channel="0", refresh=15.0):
+        super().__init__(branch, channel=channel, name=name)
+        self._resolver = resolver
+        self._refresh = refresh
+
+    def _grab(self):
+        while self.running:
+            if not self.wanted():
+                self.online = False
+                time.sleep(0.3)
+                continue
+            data = None
+            try:
+                data = self._resolver()
+            except Exception as e:
+                print(f"[{self.branch.name}] kadr olinmadi: {e}")
+            if data:
+                frame = cv2.imdecode(np.frombuffer(data, np.uint8),
+                                     cv2.IMREAD_COLOR)
+                if frame is not None:
+                    self.branch.reachable = True
+                    with self._raw_lock:
+                        self._raw = frame
+                    now = time.time()
+                    with self.lock:
+                        self.jpeg = data
+                        self.seq += 1
+                        self._stamps.append(now)
+                        if len(self._stamps) > 1:
+                            span = self._stamps[-1] - self._stamps[0]
+                            self.fps = (len(self._stamps) - 1) / span if span else 0.0
+                    self.online = True
+                else:
+                    self.online = False
+            else:
+                self.online = False
+            time.sleep(self._refresh)
+
+    def take_frame(self):
+        # Web kamera sekin yangilanadi — kadrni NULLAMAYMIZ, analizator har
+        # safar eng oxirgi olingan kadrni ko'radi (aks holda ko'p vaqt bo'sh).
+        with self._raw_lock:
+            return None if self._raw is None else self._raw.copy()
+
+
+class WebBranch(LocalBranch):
+    """Ommaviy web kamera uchun soxta filial (grid'da jonli, doim yoqiq)."""
+
+    local = True
+    always_on = True     # doim eng oxirgi frame bo'lsin
+
+    def __init__(self, name, make_camera):
+        super().__init__(name)
+        self.cameras = {"0": make_camera(self)}
+
+
+# ── Jonli HLS video kamera (EarthCam) ────────────────────────────────
+# Abbey Road sekin JPEG edi (qotib ko'rinadi). EarthCam esa 1080p JONLI
+# HLS video beradi — silliq harakat. Token muddatli, shuning uchun URL har
+# birnecha daqiqada sahifadan qayta olinadi. Referer sarlavhasi shart.
+def _earthcam_resolver(page_url):
+    ua = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.earthcam.com/"}
+
+    def resolve():
+        h = requests.get(page_url, headers=ua, timeout=12).text
+        dom = re.search(r'"html5_streamingdomain":"([^"]+)"', h)
+        path = re.search(r'(\\?/fecnetwork\\?/[0-9]+\.flv\\?/playlist\.m3u8)', h)
+        tok = re.search(r'playlist\.m3u8\?t=([^"&\\]+)', h)
+        if not (dom and path and tok):
+            return None
+        d = dom.group(1).replace("\\/", "/")
+        p = path.group(1).replace("\\/", "/")
+        return f"{d}{p}?t={tok.group(1)}"
+
+    return resolve
+
+
+class HlsCamera(LocalCamera):
+    """Jonli HLS (m3u8) video oqim — uzluksiz o'qiladi, silliq harakat."""
+
+    REOPEN_SEC = 240      # token muddati — URL'ni qayta olamiz
+
+    def __init__(self, branch, resolver, name, channel="0",
+                 referer="https://www.earthcam.com/"):
+        super().__init__(branch, channel=channel, name=name)
+        self._resolver = resolver
+        self._referer = referer
+
+    def _grab(self):
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            f"referer;{self._referer}|user_agent;Mozilla/5.0")
+        cap = None
+        opened = 0.0
+        while self.running:
+            if not self.wanted():
+                if cap is not None:
+                    cap.release(); cap = None
+                self.online = False
+                time.sleep(0.3)
+                continue
+            if cap is None or time.time() - opened > self.REOPEN_SEC:
+                if cap is not None:
+                    cap.release(); cap = None
+                try:
+                    url = self._resolver()
+                except Exception as e:
+                    print(f"[{self.branch.name}] oqim URL olinmadi: {e}")
+                    url = None
+                if not url:
+                    self.branch.reachable = False
+                    time.sleep(3)
+                    continue
+                cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+                opened = time.time()
+                if not cap.isOpened():
+                    self.branch.reachable = False
+                    cap.release(); cap = None
+                    time.sleep(3)
+                    continue
+                self.branch.reachable = True
+                print(f"[{self.branch.name}] jonli oqim ochildi")
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                cap.release(); cap = None
+                self.online = False
+                time.sleep(0.5)
+                continue
+            self.online = True
+            with self._raw_lock:
+                self._raw = frame
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ok:
+                now = time.time()
+                with self.lock:
+                    self.jpeg = buf.tobytes()
+                    self.seq += 1
+                    self._stamps.append(now)
+                    if len(self._stamps) > 1:
+                        span = self._stamps[-1] - self._stamps[0]
+                        self.fps = (len(self._stamps) - 1) / span if span else 0.0
+            time.sleep(0.02)
+        if cap is not None:
+            cap.release()
