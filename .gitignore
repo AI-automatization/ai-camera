@@ -19,3 +19,8 @@ __pycache__/
 # Zaxira va loglar
 *.bak_*
 logs/
+
+# Mehmonlar (runtime, biometrik) va dvigatel kadrlari
+data/visitors.json
+data/visitors_thumbs*/
+data/engine/

@@ -32,6 +32,9 @@ import attendance
 import nvr
 import tracker
 import static_filter
+import visitors
+import identity
+import body
 
 SLICED_ON = os.environ.get("SAHI") == "1"   # SAHI (bo'lakli sanoq) — sekin, default off
 import rules
@@ -79,7 +82,8 @@ def draw(frame, state):
     for f in state.get("faces", []):
         x, y, w, h = f["box"]
         named = f["name"] is not None
-        color = (0, 200, 0) if named else (0, 165, 255)
+        stranger = named and f["name"].startswith("Begona")
+        color = (0, 140, 255) if stranger else (0, 200, 0) if named else (0, 165, 255)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
         cv2.putText(frame, f["name"] or "?", (x, max(18, y - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
@@ -117,6 +121,8 @@ print("Modellar yuklanmoqda…")
 pose.model()             # yolov8s-pose  (PyTorch / MPS)
 pose.detect_model()      # yolov8m       (PyTorch / MPS)
 faces.load_models()      # YuNet + SFace (OpenCV DNN / CoreML)
+if visitors.STRANGER_CAMS:
+    body.load_models()   # ReID (PyTorch CPU) — mehmon tana vektori
 print("Modellar tayyor.")
 
 nvr.build()                      # filiallarni yaratadi va ishga tushiradi
@@ -124,7 +130,16 @@ CAMERAS = nvr.all_cameras()      # {'Filial/kanal': Camera}
 _last_analyzed = {}
 _track_names = {}      # {cam_key: {tid: {name, box, score}}} — trekни BIR MARTA tanib keshlaymiz
 _last_face = {}        # {cam_key: vaqt} — yuz qidirishni kamerada 1s da bir cheklaymiz
-FACE_INTERVAL = 1.0
+_identity = {}         # {cam_key: identity.CamIdentity}
+_diag_last = {}        # {(cam, tid, sabab): vaqt} — rad sabablari logga 5s da bir
+
+
+def _diag(cam, tid, msg):
+    key = (cam, tid, msg.split(" ")[0])
+    if time.time() - _diag_last.get(key, 0) >= 5:
+        _diag_last[key] = time.time()
+        print(f"[begona?] {cam} trek {tid}: {msg}")
+FACE_INTERVAL = float(os.environ.get("FACE_INTERVAL", "1.0"))   # Mac/RTSP: 0.5 (3 hit ≈ 1.5s)
 # ── INTERN sariq bejik nazorati ──────────────────────────────────────
 BADGE_YELLOW_MIN = 0.04    # bo'yin sohasida sariq ulush shundan kam = bejik yo'q
                            # (o'lchandi: bejikli intern 0.123, bejiksiz ~0)
@@ -263,31 +278,20 @@ def analyzer():
             # qidirish kamerada 1s da bir marta (throttle). Ketgan trek keshdan
             # o'chadi. found har kadr keshdan tiklanadi (attendance/detektorlar
             # o'zgarmaydi). Raqam EMAS, ISM ko'rsatiladi.
-            names = _track_names.setdefault(cam.key, {})
-            active = {p["tid"] for p in persons if "tid" in p}
-            for tid in list(names):
-                if tid not in active:
-                    del names[tid]
-            if persons and time.time() - _last_face.get(cam.key, 0) >= FACE_INTERVAL:
+            # KIM BU? — identity.py: xodim (yuz/tana) yoki mehmon, uch qoida bilan.
+            # Yuz+tana vektorlari FACE_INTERVAL da bir hisoblanadi (har kadr emas —
+            # ArcFace 247ms, ReID 32ms/odam; aks holda kamera qotadi).
+            ident = _identity.get(cam.key)
+            if ident is None:
+                ident = _identity[cam.key] = identity.CamIdentity(cam.name)
+            do_embed = bool(persons) and time.time() - _last_face.get(cam.key, 0) >= FACE_INTERVAL
+            face_res = None
+            if do_embed:
                 _last_face[cam.key] = time.time()
-                for f in faces.identify(frame, branch=branch):
-                    if not f["name"]:
-                        continue
-                    fx = f["box"][0] + f["box"][2] / 2
-                    fy = f["box"][1] + f["box"][3] / 2
-                    for p in persons:
-                        x1, y1, x2, y2 = p["box"]
-                        if x1 <= fx <= x2 and y1 <= fy <= y2 and "tid" in p:
-                            names[p["tid"]] = {"name": f["name"], "box": f["box"],
-                                               "score": f["score"]}
-                            break
-            found = []
-            for p in persons:
-                c = names.get(p.get("tid"))
-                p["name"] = c["name"] if c else None
-                if c:
-                    found.append({"box": c["box"], "name": c["name"],
-                                  "score": c["score"], "too_small": False})
+                face_res = faces.identify(frame, branch=branch)
+            found, strangers, new_visitors, reseen = ident.step(frame, persons, face_res, do_embed)
+            for rv in reseen:
+                visitors.notify_reseen(rv)
         except Exception as e:
             print(f"[analyzer] {cam.key} tahlil xatosi: {e}")
             continue
@@ -304,6 +308,14 @@ def analyzer():
         events = detectors.run(ctx)
         # Intern sariq bejik nazorati (5001 hodisaga bir marta)
         events += _badge_events(frame, found)
+        for nv in new_visitors:
+            events.append({
+                "rule_number": "LOKAL", "rule_id": None, "rule_text": "",
+                "rule_type": "info", "score": 0,
+                "who": f"Begona mijoz #{nv['n']}",
+                "reason": f"{cam.name}: bazada yo'q odam keldi",
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "detector": "stranger", "visitor": nv["id"]})
 
         h, w = frame.shape[:2]
         # Ramkalar FOIZDA saqlanadi: brauzer rasmni istalgan o'lchamda
@@ -314,8 +326,9 @@ def analyzer():
                   "y": round(100 * p["box"][1] / h, 2),
                   "w": round(100 * (p["box"][2] - p["box"][0]) / w, 2),
                   "h": round(100 * (p["box"][3] - p["box"][1]) / h, 2),
-                  "label": p.get("name") or "",
-                  "kind": "alert" if (p["reliable"] and p["head_down"]) else "person"}
+                  "label": p.get("name") or (f"Begona #{p['visitor']}" if p.get("visitor") else ""),
+                  "kind": "alert" if (p["reliable"] and p["head_down"])
+                          else ("stranger" if p.get("visitor") else "person")}
                  for i, p in enumerate(persons, 1)]
         # Telefon ramkasi — faqat qo'lda deb bog'langan telefon (3.2 nomzodi)
         boxes += [{"x": round(100 * p["phone"]["box"][0] / w, 2),
@@ -331,7 +344,13 @@ def analyzer():
                    "w": round(100 * f["box"][2] / w, 2),
                    "h": round(100 * f["box"][3] / h, 2),
                    "label": f["name"], "kind": "face"}
-                  for f in found if f["name"]]
+                  for f in found if f["name"] and f.get("how", "yuz") == "yuz"]
+        boxes += [{"x": round(100 * f["box"][0] / w, 2),
+                   "y": round(100 * f["box"][1] / h, 2),
+                   "w": round(100 * f["box"][2] / w, 2),
+                   "h": round(100 * f["box"][3] / h, 2),
+                   "label": f["name"], "kind": "stranger"}
+                  for f in strangers if f.get("how") == "yuz"]
         cam.apply({"at": time.time(),
                    "faces": found, "persons": persons, "events": events,
                    "zone": ctx.zone, "count": ctx.head_count,
@@ -345,10 +364,15 @@ def analyzer():
             ev["branch"] = branch
             # Hodisa rasmi — dalil, shuning uchun ramkalar unga CHIZILADI
             # (jonli ko'rinishdan farqli: u yerda brauzer chizadi).
-            vis = draw(frame.copy(), {"faces": found, "persons": persons,
-                                      "events": [ev]})
+            vis = draw(frame.copy(), {"faces": found + strangers,
+                                      "persons": persons, "events": [ev]})
             ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 82])
-            add_event(ev, buf.tobytes() if ok else b"")
+            jpeg = buf.tobytes() if ok else b""
+            add_event(ev, jpeg)
+            if ev.get("detector") == "stranger":
+                nv = next((v for v in new_visitors if v["id"] == ev.get("visitor")), None)
+                if nv is not None:
+                    visitors.notify_new(nv, jpeg)
             print(f"[hodisa] {branch}/{ev['rule_number']} ({ev['rule_type']}, "
                   f"{ev['score']} ball) — {ev['reason']}")
 
@@ -445,6 +469,7 @@ PAGE = r"""
  .ov.face{border-color:#60a5fa} .ov.face span{background:#60a5fa}
  .ov.alert{border-color:#f87171} .ov.alert span{background:#f87171}
  .ov.phone{border-color:#fbbf24} .ov.phone span{background:#fbbf24;color:#111}
+ .ov.stranger{border-color:#fb923c} .ov.stranger span{background:#fb923c;color:#111}
  #bigbar{color:var(--fg);display:flex;gap:14px;align-items:center;font-size:14px}
  #bigcount{font-size:22px}
  #bigtop{min-height:44px;display:flex;gap:10px;align-items:center;
@@ -508,6 +533,8 @@ PAGE = r"""
     <span class=ic>▦</span> Kameralar</button>
   <button class=navbtn id=nav-attendance onclick="showView('attendance')">
     <span class=ic>◷</span> Davomat</button>
+  <button class=navbtn id=nav-visitors onclick="showView('visitors')">
+    <span class=ic>◔</span> Mehmonlar</button>
   <button class=navbtn id=nav-staff onclick="showView('staff')">
     <span class=ic>☺</span> Xodimlar</button>
   <div class=foot id=foot>yuklanmoqda…</div>
@@ -541,6 +568,19 @@ PAGE = r"""
       Keldi = shu kuni birinchi tanilgan vaqt · Ketdi = oxirgi tanilgan vaqt.
       Tanish faqat yuz katta ko'rinadigan kameralarda ishlaydi.</p>
     <div id=atttable></div>
+  </section>
+  <!-- ═══ MEHMONLAR ═══ -->
+  <section class=view id=view-visitors>
+    <div class=head>
+      <h2>Mehmonlar</h2>
+      <div class=sp></div>
+      <select id=visdate onchange="loadVisitors()"></select>
+    </div>
+    <p class=muted style="margin-top:-6px;max-width:640px">
+      Bazada yo'q odam kamerada ko'rinsa — mehmon. Yuzi vektor bilan eslab
+      qolinadi: qaytib kelsa yangi xabar emas, "qaytdi" sanaladi.
+      Faol = so'nggi 12 soat ichida ko'rilgan.</p>
+    <div id=vistable></div>
   </section>
   <!-- ═══ XODIMLAR ═══ -->
   <section class=view id=view-staff>
@@ -581,13 +621,14 @@ PAGE = r"""
 let branch=null, built=false, view="cameras";
 function showView(v){
   view=v;
-  for(const x of ["cameras","attendance","staff"]){
+  for(const x of ["cameras","attendance","visitors","staff"]){
     document.getElementById("view-"+x).classList.toggle("on", x===v);
     document.getElementById("nav-"+x).classList.toggle("act", x===v);
   }
   if(v!=="cameras") closeBig();
   if(v!=="staff") closeCam();
   if(v==="attendance") loadAtt();
+  if(v==="visitors") loadVisitors();
   if(v==="staff") loadPeople();
 }
 // ── kameralar ──
@@ -705,6 +746,33 @@ async function loadAtt(){
       <td class=att-cam>${r.seen}x</td></tr>`).join("")}
     </table>`
     : "<div class=empty>Bu kunda yozuv yo'q</div>";
+}
+// ── mehmonlar ──
+const hm=t=>new Date(t*1000).toTimeString().slice(0,5);
+async function loadVisitors(){
+  const sel=document.getElementById("visdate");
+  const q=sel.value?("?date="+sel.value):"";
+  const d=await (await fetch("/visitors"+q)).json();
+  if(!sel.options.length || sel.options.length!==d.dates.length){
+    const cur=sel.value||d.date;
+    sel.innerHTML=d.dates.length
+      ? d.dates.map(x=>`<option ${x===cur?"selected":""}>${x}</option>`).join("")
+      : `<option>${d.date}</option>`;
+  }
+  document.getElementById("vistable").innerHTML = d.rows.length ? `
+    <table class=att><tr><th></th><th>Mehmon</th><th>Keldi</th><th>Oxirgi</th>
+      <th>Qaytdi</th><th>Kamera</th><th>Telegram</th><th>Holat</th></tr>
+    ${d.rows.map(r=>`<tr>
+      <td>${r.thumb?`<img class=attshot src="/visitors/thumb/${r.id}?t=${r.last|0}">`:""}</td>
+      <td><b>Begona #${r.n}</b><div class=muted>${r.id}</div></td>
+      <td class=t>${hm(r.first)}</td>
+      <td class=t>${hm(r.last)}</td>
+      <td class=att-cam>${r.returns}x</td>
+      <td class=att-cam>${r.camera}</td>
+      <td class=att-cam>${r.telegram?"yuborildi":"—"}</td>
+      <td class=att-cam>${r.active?"faol":"eskirgan"}</td></tr>`).join("")}
+    </table>`
+    : "<div class=empty>Bu kunda mehmon yo'q</div>";
 }
 // ── xodimlar ──
 async function loadSources(){
@@ -912,6 +980,7 @@ async function tick(){
       <img src="/shot/${e.id}" loading=lazy>
     </div>`).join("") : "<div class=empty>hodisa yo'q</div>";
   if(view==="attendance") loadAtt();
+  if(view==="visitors") loadVisitors();
 }
 // URL hash bilan bo'lim ochish (#davomat, #xodimlar)
 const hashView={davomat:"attendance",xodimlar:"staff",kameralar:"cameras"};
@@ -1006,6 +1075,22 @@ def attendance_get():
     rows = [dict(name=n, **e) for n, e in data.items()]
     rows.sort(key=lambda r: r["first"])
     return jsonify(date=d, rows=rows, dates=attendance.days())
+
+
+@app.get("/visitors")
+def visitors_get():
+    """Mehmonlar tarixi. ?date=YYYY-MM-DD (standart: bugun)."""
+    d = request.args.get("date") or time.strftime("%Y-%m-%d")
+    return jsonify(date=d, rows=visitors.MEMORY.history(d),
+                   dates=visitors.MEMORY.dates() or [d])
+
+
+@app.get("/visitors/thumb/<vid>")
+def visitors_thumb(vid):
+    p = visitors.thumb_path(vid)
+    if not os.path.exists(p):
+        return "yo'q", 404
+    return send_file(p, mimetype="image/jpeg")
 
 
 @app.get("/faces")

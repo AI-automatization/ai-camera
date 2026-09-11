@@ -107,8 +107,16 @@ def identify(frame, branch=None):
             s = max(float(np.dot(e, emb)) for e in embs)
             if s > score:
                 best, score = name, s
+        # emb/sifat — begona (mehmon) xotirasi uchun; JSON holatga KIRMAYDI
+        x, y, w, h = box
+        crop = frame[max(0, y):y + h, max(0, x):x + w]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.size else None
+        pose = getattr(f, "pose", None)
         out.append({"box": box, "name": best if score >= THRESHOLD else None,
-                    "score": round(score, 3), "too_small": False})
+                    "score": round(score, 3), "too_small": False, "emb": emb,
+                    "sharp": round(_sharp(gray)) if gray is not None else 0,
+                    "bright": round(float(gray.mean())) if gray is not None else 0,
+                    "pose": [round(float(p)) for p in pose] if pose is not None else None})
     return out
 
 
